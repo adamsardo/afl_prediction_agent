@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from afl_prediction_agent.sources.afl.connector import FitzRoyBridge
+from afl_prediction_agent.sources.afl.connector import FitzRoyBridge, FitzRoyConnector
 from afl_prediction_agent.sources.afl_com.injuries import AFLComInjuryConnector
 from afl_prediction_agent.sources.bom.connector import BomWeatherConnector
 from afl_prediction_agent.sources.footywire.injuries import FootyWireInjuryConnector
@@ -57,6 +57,206 @@ def test_fitzroy_bridge_surfaces_subprocess_errors(monkeypatch, tmp_path) -> Non
 
     with pytest.raises(RuntimeError, match="fitzRoy exploded"):
         bridge.fetch("fixtures", season_year=2026, round_number=7)
+
+
+def test_fitzroy_fixture_mapper_supports_current_official_fields() -> None:
+    match = FitzRoyConnector()._fixture_row_to_match(
+        {
+            "round.year": "2024",
+            "round.roundNumber": 1,
+            "round.name": "Round 1",
+            "match.utcStartTime": "2024-03-14T08:30:00",
+            "match.homeTeam.name": "Carlton",
+            "match.homeTeam.nickname": "Blues",
+            "match.homeTeam.abbr": "CARL",
+            "match.homeTeam.teamId": "CD_T30",
+            "match.awayTeam.name": "Richmond",
+            "match.awayTeam.nickname": "Tigers",
+            "match.awayTeam.abbr": "RICH",
+            "match.awayTeam.teamId": "CD_T120",
+            "venue.name": "MCG",
+            "venue.address": "Melbourne",
+            "venue.state": "VIC",
+            "venue.venueId": "CD_V40",
+            "venue.timeZone": "Australia/Melbourne",
+            "match.matchId": "CD_M20240140101",
+            "match.status": "CONCLUDED",
+            "homeTeamScore.matchScore.totalScore": 86,
+            "awayTeamScore.matchScore.totalScore": 81,
+        }
+    )
+
+    assert match.season_year == 2024
+    assert match.round_number == 1
+    assert match.home_team.name == "Carlton"
+    assert match.away_team.name == "Richmond"
+    assert match.home_score == 86
+    assert match.away_score == 81
+    assert match.match_code == "CD_M20240140101"
+
+
+def test_fitzroy_fixture_mapper_supports_afltables_fields() -> None:
+    match = FitzRoyConnector(source="afltables")._fixture_row_to_match(
+        {
+            "Season": 2024,
+            "Round.Number": 1,
+            "Round": "R1",
+            "Date": "2024-03-07",
+            "Home.Team": "Sydney",
+            "Away.Team": "Melbourne",
+            "Venue": "S.C.G.",
+            "Game": 16407,
+            "Home.Points": 86,
+            "Away.Points": 64,
+        }
+    )
+
+    assert match.season_year == 2024
+    assert match.round_number == 1
+    assert match.home_team.name == "Sydney"
+    assert match.away_team.name == "Melbourne"
+    assert match.home_score == 86
+    assert match.away_score == 64
+    assert match.status == "CONCLUDED"
+
+
+def test_fitzroy_lineup_mapper_supports_current_official_fields() -> None:
+    row = {
+        "providerId": "CD_M20240140101",
+        "teamName": "Carlton",
+        "teamNickname": "Blues",
+        "teamAbbr": "CARL",
+        "teamId": "CD_T30",
+        "teamType": "home",
+        "player.playerId": "CD_I997316",
+        "player.playerName.givenName": "Lewis",
+        "player.playerName.surname": "Young",
+        "position": "BPL",
+    }
+
+    class StubBridge:
+        def fetch(self, *args, **kwargs):
+            return SimpleNamespace(
+                envelope=SimpleNamespace(response_meta={}),
+                rows=[row],
+            )
+
+    _, snapshots = FitzRoyConnector(bridge=StubBridge()).fetch_lineups(season_year=2024, round_number=1)
+
+    assert len(snapshots) == 1
+    assert snapshots[0].team.name == "Carlton"
+    assert snapshots[0].home_or_away == "home"
+    assert snapshots[0].players[0].source_player_name == "Lewis Young"
+    assert snapshots[0].players[0].source_player_id == "CD_I997316"
+
+
+def test_fitzroy_team_stats_mapper_supports_archive_team_field() -> None:
+    row = {
+        "Game": 16407,
+        "Team": "Adelaide",
+        "Home.Team": "Sydney",
+        "Away.Team": "Melbourne",
+        "1%_for": 1043,
+    }
+
+    class StubBridge:
+        def fetch(self, *args, **kwargs):
+            return SimpleNamespace(
+                envelope=SimpleNamespace(response_meta={}),
+                rows=[row],
+            )
+
+    _, normalized = FitzRoyConnector(bridge=StubBridge(), source="afltables").fetch_team_stats(
+        season_year=2024,
+        round_number=1,
+    )
+
+    assert normalized[0].match_code == "16407"
+    assert normalized[0].team_name == "Adelaide"
+    assert normalized[0].home_team_name == "Sydney"
+    assert normalized[0].away_team_name == "Melbourne"
+    assert normalized[0].stats["1%_for"] == 1043
+
+
+def test_fitzroy_player_stats_mapper_supports_current_official_fields() -> None:
+    row = {
+        "providerId": "CD_M20240140101",
+        "team.name": "Carlton",
+        "player.givenName": "Blake",
+        "player.surname": "Acres",
+        "player.playerId": "CD_I296294",
+        "disposals": 17,
+    }
+
+    class StubBridge:
+        def fetch(self, *args, **kwargs):
+            return SimpleNamespace(
+                envelope=SimpleNamespace(response_meta={}),
+                rows=[row],
+            )
+
+    _, normalized = FitzRoyConnector(bridge=StubBridge()).fetch_player_stats(season_year=2024, round_number=1)
+
+    assert normalized[0].match_code == "CD_M20240140101"
+    assert normalized[0].team_name == "Carlton"
+    assert normalized[0].player_name == "Blake Acres"
+    assert normalized[0].source_player_id == "CD_I296294"
+    assert normalized[0].stats["disposals"] == 17
+
+
+def test_fitzroy_team_stats_fallback_derives_from_player_stats() -> None:
+    player_rows = [
+        {
+            "providerId": "CD_M20240140101",
+            "home.team.name": "Carlton",
+            "away.team.name": "Richmond",
+            "team.name": "Carlton",
+            "inside50s": 4,
+            "clearances.totalClearances": 2,
+            "contestedPossessions": 5,
+            "marksInside50": 1,
+            "tacklesInside50": 1,
+            "disposals": 17,
+            "kicks": 11,
+            "handballs": 6,
+            "goals": 0,
+        },
+        {
+            "providerId": "CD_M20240140101",
+            "home.team.name": "Carlton",
+            "away.team.name": "Richmond",
+            "team.name": "Carlton",
+            "inside50s": 3,
+            "clearances.totalClearances": 1,
+            "contestedPossessions": 4,
+            "marksInside50": 0,
+            "tacklesInside50": 2,
+            "disposals": 12,
+            "kicks": 8,
+            "handballs": 4,
+            "goals": 1,
+        },
+    ]
+
+    class StubBridge:
+        def fetch(self, dataset, **kwargs):
+            if dataset == "team_stats":
+                raise RuntimeError("unsupported")
+            return SimpleNamespace(
+                envelope=SimpleNamespace(response_meta={}, raw_payload={"rows": player_rows}),
+                rows=player_rows,
+            )
+
+    envelope, normalized = FitzRoyConnector(bridge=StubBridge()).fetch_team_stats(season_year=2024, round_number=1)
+
+    assert envelope.response_meta["derived_from_player_stats"] is True
+    assert len(normalized) == 1
+    assert normalized[0].team_name == "Carlton"
+    assert normalized[0].home_team_name == "Carlton"
+    assert normalized[0].away_team_name == "Richmond"
+    assert normalized[0].stats["inside_50"] == 7.0
+    assert normalized[0].stats["clearances"] == 3.0
+    assert normalized[0].stats["goals"] == 1.0
 
 
 def test_afl_com_parser_reads_tables_in_order() -> None:
