@@ -35,9 +35,10 @@ CORRECTION_STEP_NAME = "correction_pass_v1"
 class MatchAgentRunResult:
     analysts: dict[str, dict[str, Any]]
     cases: dict[str, dict[str, Any]]
-    final_response: FinalDecisionResponse
-    final_step_id: Any
+    final_response: FinalDecisionResponse | None
+    final_step_id: Any | None
     correction_pass_count: int
+    failed_steps: list[dict[str, Any]]
 
 
 class AgentPipelineRunner:
@@ -55,38 +56,73 @@ class AgentPipelineRunner:
     ) -> MatchAgentRunResult:
         analysts: dict[str, dict[str, Any]] = {}
         cases: dict[str, dict[str, Any]] = {}
+        failed_steps: list[dict[str, Any]] = []
         analyst_adapter = build_adapter(config.analyst_model.provider)
         case_adapter = build_adapter(config.case_model.provider)
         final_adapter = build_adapter(config.final_model.provider)
 
         for step_name in ANALYST_STEP_NAMES:
-            result = self._execute_step(
-                round_run_id=round_run_id,
-                match_id=match_id,
-                step_name=step_name,
-                input_json={"dossier": dossier.model_dump(mode="json")},
-                settings=config.analyst_model,
-                adapter=analyst_adapter,
-                schema_type=AnalystResponse,
-            )
-            analysts[step_name] = result
+            try:
+                result = self._execute_step(
+                    round_run_id=round_run_id,
+                    match_id=match_id,
+                    step_name=step_name,
+                    input_json={"dossier": dossier.model_dump(mode="json")},
+                    settings=config.analyst_model,
+                    adapter=analyst_adapter,
+                    schema_type=AnalystResponse,
+                )
+                analysts[step_name] = result
+                self._record_validation(
+                    round_run_id=round_run_id,
+                    match_id=match_id,
+                    component_name=step_name,
+                    validation_status="passed",
+                )
+            except Exception as exc:
+                failed_steps.append({"step_name": step_name, "error": str(exc)})
+                self._record_validation(
+                    round_run_id=round_run_id,
+                    match_id=match_id,
+                    component_name=step_name,
+                    validation_status="failed",
+                    errors=[{"message": str(exc)}],
+                )
 
         for step_name in CASE_STEP_NAMES:
-            result = self._execute_step(
-                round_run_id=round_run_id,
-                match_id=match_id,
-                step_name=step_name,
-                input_json={
-                    "dossier": dossier.model_dump(mode="json"),
-                    "analysts": analysts,
-                },
-                settings=config.case_model,
-                adapter=case_adapter,
-                schema_type=CaseAgentResponse,
-            )
-            cases[step_name] = result
+            try:
+                result = self._execute_step(
+                    round_run_id=round_run_id,
+                    match_id=match_id,
+                    step_name=step_name,
+                    input_json={
+                        "dossier": dossier.model_dump(mode="json"),
+                        "analysts": analysts,
+                    },
+                    settings=config.case_model,
+                    adapter=case_adapter,
+                    schema_type=CaseAgentResponse,
+                )
+                cases[step_name] = result
+                self._record_validation(
+                    round_run_id=round_run_id,
+                    match_id=match_id,
+                    component_name=step_name,
+                    validation_status="passed",
+                )
+            except Exception as exc:
+                failed_steps.append({"step_name": step_name, "error": str(exc)})
+                self._record_validation(
+                    round_run_id=round_run_id,
+                    match_id=match_id,
+                    component_name=step_name,
+                    validation_status="failed",
+                    errors=[{"message": str(exc)}],
+                )
 
         correction_pass_count = 0
+        final_response: FinalDecisionResponse | None = None
+        final_step_id = None
         try:
             final_json, final_step_id = self._execute_step_with_metadata(
                 round_run_id=round_run_id,
@@ -104,46 +140,55 @@ class AgentPipelineRunner:
             final_response = FinalDecisionResponse.model_validate(final_json)
         except Exception as exc:
             correction_pass_count = 1
-            self.session.add(
-                ValidationLog(
-                    round_run_id=round_run_id,
-                    match_id=match_id,
-                    component_name=FINAL_STEP_NAME,
-                    validation_status="failed",
-                    errors=[{"message": str(exc)}],
-                )
-            )
-            final_json, final_step_id = self._execute_step_with_metadata(
+            failed_steps.append({"step_name": FINAL_STEP_NAME, "error": str(exc)})
+            self._record_validation(
                 round_run_id=round_run_id,
                 match_id=match_id,
-                step_name=CORRECTION_STEP_NAME,
-                input_json={
-                    "dossier": dossier.model_dump(mode="json"),
-                    "analysts": analysts,
-                    "cases": cases,
-                    "validation_error": str(exc),
-                },
-                settings=config.final_model,
-                adapter=final_adapter,
-                schema_type=FinalDecisionResponse,
+                component_name=FINAL_STEP_NAME,
+                validation_status="failed",
+                errors=[{"message": str(exc)}],
             )
-            final_response = FinalDecisionResponse.model_validate(final_json)
+            try:
+                final_json, final_step_id = self._execute_step_with_metadata(
+                    round_run_id=round_run_id,
+                    match_id=match_id,
+                    step_name=CORRECTION_STEP_NAME,
+                    input_json={
+                        "dossier": dossier.model_dump(mode="json"),
+                        "analysts": analysts,
+                        "cases": cases,
+                        "failed_steps": failed_steps,
+                        "validation_error": str(exc),
+                    },
+                    settings=config.final_model,
+                    adapter=final_adapter,
+                    schema_type=FinalDecisionResponse,
+                )
+                final_response = FinalDecisionResponse.model_validate(final_json)
+            except Exception as correction_exc:
+                failed_steps.append({"step_name": CORRECTION_STEP_NAME, "error": str(correction_exc)})
+                self._record_validation(
+                    round_run_id=round_run_id,
+                    match_id=match_id,
+                    component_name=CORRECTION_STEP_NAME,
+                    validation_status="failed",
+                    errors=[{"message": str(correction_exc)}],
+                )
 
-        self.session.add(
-            ValidationLog(
+        if final_response is not None:
+            self._record_validation(
                 round_run_id=round_run_id,
                 match_id=match_id,
                 component_name=FINAL_STEP_NAME,
                 validation_status="passed",
-                errors=None,
             )
-        )
         return MatchAgentRunResult(
             analysts=analysts,
             cases=cases,
             final_response=final_response,
             final_step_id=final_step_id,
             correction_pass_count=correction_pass_count,
+            failed_steps=failed_steps,
         )
 
     def _execute_step(
@@ -247,3 +292,22 @@ class AgentPipelineRunner:
             )
         except KeyError:
             return f"{template_text}\n\nINPUT\n{serialized}"
+
+    def _record_validation(
+        self,
+        *,
+        round_run_id,
+        match_id,
+        component_name: str,
+        validation_status: str,
+        errors: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.session.add(
+            ValidationLog(
+                round_run_id=round_run_id,
+                match_id=match_id,
+                component_name=component_name,
+                validation_status=validation_status,
+                errors=errors,
+            )
+        )

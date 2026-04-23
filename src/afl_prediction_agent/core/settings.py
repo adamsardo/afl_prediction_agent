@@ -2,12 +2,25 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+import subprocess
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
+
+
+def _git_config_email() -> str | None:
+    result = subprocess.run(
+        ["git", "config", "user.email"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    email = result.stdout.strip()
+    return email or None
 
 
 class Settings(BaseSettings):
@@ -19,6 +32,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "AFL Prediction Agent"
+    contact_email: str | None = Field(default_factory=_git_config_email)
     database_url: str = Field(
         default="postgresql+psycopg://postgres:postgres@localhost:5432/afl_agent"
     )
@@ -41,6 +55,7 @@ class Settings(BaseSettings):
     odds_api_key: str | None = None
     odds_au_bookmakers: str | None = None
     squiggle_benchmark_source: str = "aggregate"
+    squiggle_user_agent: str | None = None
 
 
 @lru_cache(maxsize=1)

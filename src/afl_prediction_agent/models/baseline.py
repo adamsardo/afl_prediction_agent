@@ -158,8 +158,21 @@ class DeterministicBaselineService:
             (features.get("home_recent_win_rate", 0.5) - features.get("away_recent_win_rate", 0.5)) * 1.4
             + (features.get("home_recent_avg_margin", 0.0) - features.get("away_recent_avg_margin", 0.0)) / 30.0
         )
+        split_edge = (
+            (features.get("home_split_win_rate", 0.5) - features.get("away_split_win_rate", 0.5)) * 0.8
+            + (features.get("home_venue_win_rate", 0.5) - features.get("away_venue_win_rate", 0.5)) * 0.6
+        )
         lineup_edge = (
             (features.get("home_lineup_strength", 0.0) - features.get("away_lineup_strength", 0.0)) / 45.0
+        )
+        continuity_edge = (
+            (features.get("home_continuity_score", 0.5) - features.get("away_continuity_score", 0.5)) * 0.4
+        )
+        experience_edge = (
+            (features.get("home_selected_experience", 0.0) - features.get("away_selected_experience", 0.0)) / 40.0
+        )
+        replacement_edge = (
+            (features.get("away_missing_player_penalty", 0.0) - features.get("home_missing_player_penalty", 0.0)) / 20.0
         )
         injury_edge = (
             (features.get("away_injury_count", 0.0) - features.get("home_injury_count", 0.0)) * 0.06
@@ -167,12 +180,31 @@ class DeterministicBaselineService:
         rest_edge = (
             (features.get("home_rest_days", 7.0) - features.get("away_rest_days", 7.0)) / 14.0
         )
+        ladder_edge = (
+            (features.get("away_ladder_position", 9.0) - features.get("home_ladder_position", 9.0)) / 20.0
+            + (features.get("home_form_momentum", 0.0) - features.get("away_form_momentum", 0.0)) * 0.5
+        )
         venue_edge = 0.18 if features.get("home_ground_edge") else 0.0
+        weather_edge = -0.04 if features.get("weather_wet_flag") else 0.0
         squiggle_edge = 0.0
         squiggle_home = features.get("squiggle_home_probability")
         if isinstance(squiggle_home, (int, float)):
             squiggle_edge = (float(squiggle_home) - 0.5) * 0.8
-        logit = market_anchor + form_edge + lineup_edge + injury_edge + rest_edge + venue_edge + squiggle_edge
+        logit = (
+            market_anchor
+            + form_edge
+            + split_edge
+            + lineup_edge
+            + continuity_edge
+            + experience_edge
+            + replacement_edge
+            + injury_edge
+            + rest_edge
+            + ladder_edge
+            + venue_edge
+            + weather_edge
+            + squiggle_edge
+        )
         return round(_clip_probability(_sigmoid(logit)), 6)
 
     def _heuristic_margin(self, features: dict[str, Any], home_probability: float) -> float:
@@ -183,8 +215,14 @@ class DeterministicBaselineService:
         lineup_edge = (
             (features.get("home_lineup_strength", 0.0) - features.get("away_lineup_strength", 0.0)) * 0.12
         )
+        continuity_edge = (
+            (features.get("home_continuity_score", 0.5) - features.get("away_continuity_score", 0.5)) * 12.0
+        )
+        replacement_edge = (
+            (features.get("away_missing_player_penalty", 0.0) - features.get("home_missing_player_penalty", 0.0)) * 0.8
+        )
         venue_edge = 5.0 if features.get("home_ground_edge") else 0.0
-        return probability_margin + recent_margin_edge + lineup_edge + venue_edge
+        return probability_margin + recent_margin_edge + lineup_edge + continuity_edge + replacement_edge + venue_edge
 
     def _top_drivers(self, features: dict[str, Any]) -> list[dict[str, Any]]:
         candidates: list[tuple[str, float, str, str]] = [
@@ -201,6 +239,14 @@ class DeterministicBaselineService:
                 "aggregate player form rating differential",
             ),
             (
+                "selection continuity",
+                min(abs(features.get("home_continuity_score", 0.5) - features.get("away_continuity_score", 0.5)) * 1.5, 1.0),
+                "home"
+                if features.get("home_continuity_score", 0.5) >= features.get("away_continuity_score", 0.5)
+                else "away",
+                "named lineup continuity relative to prior match",
+            ),
+            (
                 "market consensus",
                 abs((features.get("market_home_implied_probability") or 0.5) - 0.5) * 2.0,
                 "home"
@@ -214,6 +260,25 @@ class DeterministicBaselineService:
                 0.55 if features.get("home_ground_edge") else 0.2,
                 "home" if features.get("home_ground_edge") else "neutral",
                 "home ground and travel context",
+            ),
+            (
+                "ladder and momentum",
+                min(
+                    abs(features.get("home_form_momentum", 0.0) - features.get("away_form_momentum", 0.0))
+                    + abs(features.get("home_ladder_position", 9.0) - features.get("away_ladder_position", 9.0)) / 18.0,
+                    1.0,
+                ),
+                "home"
+                if (
+                    features.get("home_ladder_position", 9.0),
+                    features.get("home_form_momentum", 0.0),
+                )
+                <= (
+                    features.get("away_ladder_position", 9.0),
+                    features.get("away_form_momentum", 0.0),
+                )
+                else "away",
+                "season ladder position and recent momentum",
             ),
         ]
         top = sorted(candidates, key=lambda item: item[1], reverse=True)[:3]

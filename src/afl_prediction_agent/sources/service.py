@@ -496,7 +496,22 @@ class RoundSourceSyncService:
         summaries.append(self.ingest_weather(round_id=round_id, round_run_id=round_run_id))
         summaries.append(self.ingest_odds(round_id=round_id, round_run_id=round_run_id))
         if round_run_id is not None:
-            summaries.append(self.ingest_benchmarks(round_id=round_id, round_run_id=round_run_id))
+            try:
+                summaries.append(self.ingest_benchmarks(round_id=round_id, round_run_id=round_run_id))
+            except Exception as exc:
+                self.snapshot_service.create_audit_event(
+                    event_type="benchmark_source_failed",
+                    payload={"round_id": str(round_id), "error": str(exc)},
+                    round_run_id=round_run_id,
+                    match_id=None,
+                )
+                summaries.append(
+                    IngestSummary(
+                        self.squiggle_connector.source_name,
+                        created=0,
+                        errors=[str(exc)],
+                    )
+                )
         return summaries
 
     def review_unresolved(self) -> dict[str, list[dict[str, Any]]]:

@@ -14,6 +14,12 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _float_or_none(value) -> float | None:
+    if value in (None, ""):
+        return None
+    return float(value)
+
+
 class SquiggleConnector:
     source_name = "squiggle"
     base_url = "https://api.squiggle.com.au/"
@@ -22,6 +28,7 @@ class SquiggleConnector:
         settings = get_settings()
         self.http_client = http_client or HttpFetchClient()
         self.benchmark_source = benchmark_source or settings.squiggle_benchmark_source
+        self.user_agent = settings.squiggle_user_agent or self._default_user_agent(settings.app_name, settings.contact_email)
 
     def fetch_predictions(
         self,
@@ -31,16 +38,19 @@ class SquiggleConnector:
     ) -> tuple[FetchEnvelope, list[NormalizedBenchmarkPrediction]]:
         sources_response = self.http_client.get(
             self.base_url,
+            headers=self._headers(),
             params={"q": "sources"},
             expect_json=True,
         )
         tips_response = self.http_client.get(
             self.base_url,
+            headers=self._headers(),
             params={"q": "tips", "year": season_year, "round": round_number},
             expect_json=True,
         )
         games_response = self.http_client.get(
             self.base_url,
+            headers=self._headers(),
             params={"q": "games", "year": season_year, "round": round_number},
             expect_json=True,
         )
@@ -55,8 +65,8 @@ class SquiggleConnector:
             if preferred_source and tip.get("sourceid") != preferred_source["id"]:
                 continue
             game = games_by_id.get(tip.get("gameid"), {})
-            home_prob = tip.get("prob")
-            margin = tip.get("margin")
+            home_prob = _float_or_none(tip.get("prob"))
+            margin = _float_or_none(tip.get("margin"))
             predictions.append(
                 NormalizedBenchmarkPrediction(
                     home_team_name=game.get("hteam") or tip.get("hteam"),
@@ -67,9 +77,9 @@ class SquiggleConnector:
                     predicted_winner_name=(game.get("hteam") if margin and margin > 0 else game.get("ateam"))
                     if margin is not None
                     else tip.get("tip"),
-                    home_win_probability=float(home_prob) if home_prob is not None else None,
-                    away_win_probability=(1 - float(home_prob)) if home_prob is not None else None,
-                    predicted_margin=float(margin) if margin is not None else None,
+                    home_win_probability=home_prob,
+                    away_win_probability=(1 - home_prob) if home_prob is not None else None,
+                    predicted_margin=margin,
                     match_code=str(game.get("id")) if game.get("id") is not None else None,
                 )
             )
@@ -88,6 +98,18 @@ class SquiggleConnector:
             },
         )
         return envelope, predictions
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "User-Agent": self.user_agent,
+            "Accept": "application/json,text/plain;q=0.9,*/*;q=0.8",
+        }
+
+    @staticmethod
+    def _default_user_agent(app_name: str, contact_email: str | None) -> str:
+        normalized_name = app_name.strip() or "afl-prediction-agent"
+        email = (contact_email or "contact@example.invalid").strip()
+        return f"{normalized_name} - {email}"
 
     def _preferred_source(self, sources: list[dict]) -> dict | None:
         if not sources:

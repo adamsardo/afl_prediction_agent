@@ -24,7 +24,7 @@ def test_fitzroy_bridge_serializes_command(monkeypatch, tmp_path) -> None:
 
     def fake_run(command, **kwargs):
         captured["command"] = command
-        captured["timeout"] = kwargs["timeout"]
+        captured["timeout"] = kwargs.get("timeout")
         return SimpleNamespace(returncode=0, stdout="[]", stderr="")
 
     monkeypatch.setattr("afl_prediction_agent.sources.afl.connector.subprocess.run", fake_run)
@@ -268,3 +268,26 @@ def test_squiggle_connector_prefers_aggregate_source() -> None:
     assert len(predictions) == 1
     assert predictions[0].home_win_probability == 0.61
     assert predictions[0].away_win_probability == 0.39
+    assert http_client.calls[0]["headers"]["User-Agent"].startswith("AFL Prediction Agent - ")
+
+
+def test_squiggle_default_user_agent_uses_contact_email() -> None:
+    assert SquiggleConnector._default_user_agent("AFL Prediction Agent", "bot@example.com") == (
+        "AFL Prediction Agent - bot@example.com"
+    )
+
+
+def test_squiggle_connector_coerces_string_numeric_fields() -> None:
+    http_client = FakeHttpClient(
+        [
+            SimpleNamespace(status_code=200, headers={}, text="", json_data={"sources": [{"id": 2, "name": "aggregate"}]}),
+            SimpleNamespace(status_code=200, headers={}, text="", json_data={"tips": [{"gameid": 10, "sourceid": 2, "prob": "0.61", "margin": "14"}]}),
+            SimpleNamespace(status_code=200, headers={}, text="", json_data={"games": [{"id": 10, "hteam": "Carlton", "ateam": "Geelong"}]}),
+        ]
+    )
+    connector = SquiggleConnector(http_client=http_client)
+
+    _, predictions = connector.fetch_predictions(season_year=2026, round_number=7)
+
+    assert predictions[0].predicted_margin == 14.0
+    assert predictions[0].predicted_winner_name == "Carlton"

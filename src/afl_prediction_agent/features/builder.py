@@ -88,11 +88,17 @@ class FeatureBuilder:
             session,
             team_id=context.home_team.id,
             before=context.match.scheduled_at,
+            venue_id=context.venue.id,
+            expected_side="home",
+            season_id=context.season.id,
         )
         away_form = self._team_form(
             session,
             team_id=context.away_team.id,
             before=context.match.scheduled_at,
+            venue_id=context.venue.id,
+            expected_side="away",
+            season_id=context.season.id,
         )
         team_stat_edges = self._team_stat_edges(
             session,
@@ -116,22 +122,39 @@ class FeatureBuilder:
             "away_recent_avg_points_against": away_form["avg_points_against"],
             "home_rest_days": home_form["rest_days"],
             "away_rest_days": away_form["rest_days"],
+            "home_split_win_rate": home_form["split_win_rate"],
+            "away_split_win_rate": away_form["split_win_rate"],
+            "home_venue_win_rate": home_form["venue_win_rate"],
+            "away_venue_win_rate": away_form["venue_win_rate"],
+            "home_ladder_position": home_form["ladder_position"],
+            "away_ladder_position": away_form["ladder_position"],
+            "home_form_momentum": home_form["form_momentum"],
+            "away_form_momentum": away_form["form_momentum"],
             "home_is_interstate": venue_weather["travel_context"]["home_interstate"],
             "away_is_interstate": venue_weather["travel_context"]["away_interstate"],
             "home_ground_edge": venue_weather["home_ground_edge"],
             "home_named_changes": selection_features["home_named_changes"],
             "away_named_changes": selection_features["away_named_changes"],
+            "home_continuity_score": selection_features["home_continuity_score"],
+            "away_continuity_score": selection_features["away_continuity_score"],
             "home_lineup_strength": selection_features["home_lineup_strength"],
             "away_lineup_strength": selection_features["away_lineup_strength"],
+            "home_selected_experience": selection_features["home_selected_experience"],
+            "away_selected_experience": selection_features["away_selected_experience"],
+            "home_missing_player_penalty": selection_features["home_missing_player_penalty"],
+            "away_missing_player_penalty": selection_features["away_missing_player_penalty"],
             "home_injury_count": selection_features["home_injury_count"],
             "away_injury_count": selection_features["away_injury_count"],
             "market_home_implied_probability": market_features["home_implied_probability"],
             "market_away_implied_probability": market_features["away_implied_probability"],
             "bookmaker_count": market_features["bookmaker_count"],
+            "market_confidence": market_features["market_confidence"],
             "weather_rain_probability_pct": venue_weather["forecast"]["rain_probability_pct"],
             "weather_rainfall_mm": venue_weather["forecast"]["rainfall_mm"],
             "weather_wind_kmh": venue_weather["forecast"]["wind_kmh"],
             "weather_temperature_c": venue_weather["forecast"]["temperature_c"],
+            "weather_wet_flag": venue_weather["forecast"]["wet_weather_flag"],
+            "weather_windy_flag": venue_weather["forecast"]["windy_flag"],
             "squiggle_home_probability": market_features["benchmark_home_probability"],
             "squiggle_predicted_margin": market_features["benchmark_predicted_margin"],
             "team_stat_edges": team_stat_edges,
@@ -173,8 +196,14 @@ class FeatureBuilder:
             selection_section={
                 "home_named_changes": selection_features["home_named_changes"],
                 "away_named_changes": selection_features["away_named_changes"],
+                "home_continuity_score": selection_features["home_continuity_score"],
+                "away_continuity_score": selection_features["away_continuity_score"],
                 "home_lineup_strength": selection_features["home_lineup_strength"],
                 "away_lineup_strength": selection_features["away_lineup_strength"],
+                "home_selected_experience": selection_features["home_selected_experience"],
+                "away_selected_experience": selection_features["away_selected_experience"],
+                "home_missing_player_penalty": selection_features["home_missing_player_penalty"],
+                "away_missing_player_penalty": selection_features["away_missing_player_penalty"],
                 "key_absences": selection_features["key_absences"],
             },
             venue_weather_section=venue_weather,
@@ -182,6 +211,8 @@ class FeatureBuilder:
                 "home_implied_probability": market_features["home_implied_probability"],
                 "away_implied_probability": market_features["away_implied_probability"],
                 "bookmaker_count": market_features["bookmaker_count"],
+                "market_confidence": market_features["market_confidence"],
+                "baseline_disagreement": None,
             },
             benchmarks_section={
                 "squiggle": {
@@ -191,7 +222,16 @@ class FeatureBuilder:
             },
         )
 
-    def _team_form(self, session: Session, *, team_id, before: datetime) -> dict[str, float]:
+    def _team_form(
+        self,
+        session: Session,
+        *,
+        team_id,
+        before: datetime,
+        venue_id,
+        expected_side: str,
+        season_id,
+    ) -> dict[str, float]:
         matches = session.scalars(
             select(Match)
             .where(
@@ -211,6 +251,10 @@ class FeatureBuilder:
                 "avg_points_for": 0.0,
                 "avg_points_against": 0.0,
                 "rest_days": 7.0,
+                "split_win_rate": 0.5,
+                "venue_win_rate": 0.5,
+                "ladder_position": 9.0,
+                "form_momentum": 0.0,
             }
 
         rows: list[dict[str, float]] = []
@@ -236,7 +280,84 @@ class FeatureBuilder:
             "avg_points_for": float(df["points_for"].mean()),
             "avg_points_against": float(df["points_against"].mean()),
             "rest_days": rest_days,
+            "split_win_rate": self._split_win_rate(matches, team_id=team_id, expected_side=expected_side),
+            "venue_win_rate": self._venue_win_rate(matches, team_id=team_id, venue_id=venue_id),
+            "ladder_position": self._ladder_position(session, team_id=team_id, season_id=season_id, before=before),
+            "form_momentum": self._form_momentum(rows),
         }
+
+    def _split_win_rate(self, matches: list[Match], *, team_id, expected_side: str) -> float:
+        relevant = [
+            match
+            for match in matches
+            if (expected_side == "home" and match.home_team_id == team_id)
+            or (expected_side == "away" and match.away_team_id == team_id)
+        ]
+        if not relevant:
+            return 0.5
+        wins = 0.0
+        for match in relevant[:5]:
+            team_score, opp_score = _match_team_score(match, team_id)
+            wins += 1.0 if team_score > opp_score else 0.0
+        return wins / min(len(relevant), 5)
+
+    def _venue_win_rate(self, matches: list[Match], *, team_id, venue_id) -> float:
+        relevant = [match for match in matches if match.venue_id == venue_id]
+        if not relevant:
+            return 0.5
+        wins = 0.0
+        for match in relevant[:5]:
+            team_score, opp_score = _match_team_score(match, team_id)
+            wins += 1.0 if team_score > opp_score else 0.0
+        return wins / min(len(relevant), 5)
+
+    def _ladder_position(self, session: Session, *, team_id, season_id, before: datetime) -> float:
+        matches = session.scalars(
+            select(Match).where(
+                Match.season_id == season_id,
+                Match.scheduled_at < before,
+                Match.status == "completed",
+                Match.home_score.is_not(None),
+                Match.away_score.is_not(None),
+            )
+        ).all()
+        if not matches:
+            return 9.0
+        ladder: dict[str, dict[str, float]] = {}
+        for match in matches:
+            for current_team_id, points_for, points_against, won in [
+                (match.home_team_id, float(match.home_score or 0), float(match.away_score or 0), (match.home_score or 0) > (match.away_score or 0)),
+                (match.away_team_id, float(match.away_score or 0), float(match.home_score or 0), (match.away_score or 0) > (match.home_score or 0)),
+            ]:
+                bucket = ladder.setdefault(
+                    str(current_team_id),
+                    {"wins": 0.0, "points_for": 0.0, "points_against": 0.0, "played": 0.0},
+                )
+                bucket["played"] += 1.0
+                bucket["wins"] += 1.0 if won else 0.0
+                bucket["points_for"] += points_for
+                bucket["points_against"] += points_against
+        ordered = sorted(
+            ladder.items(),
+            key=lambda item: (
+                item[1]["wins"],
+                (item[1]["points_for"] / item[1]["points_against"]) if item[1]["points_against"] else item[1]["points_for"],
+            ),
+            reverse=True,
+        )
+        for index, (ladder_team_id, _) in enumerate(ordered, start=1):
+            if ladder_team_id == str(team_id):
+                return float(index)
+        return float(len(ordered) + 1)
+
+    def _form_momentum(self, rows: list[dict[str, float]]) -> float:
+        if not rows:
+            return 0.0
+        recent = rows[:3]
+        overall = rows[:5]
+        recent_win_rate = sum(row["win"] for row in recent) / len(recent)
+        overall_win_rate = sum(row["win"] for row in overall) / len(overall)
+        return round(recent_win_rate - overall_win_rate, 3)
 
     def _selection_features(
         self,
@@ -262,6 +383,12 @@ class FeatureBuilder:
         away_named_changes = self._count_named_changes(away_players, away_previous)
         home_lineup_strength = self._lineup_strength(session, home_players)
         away_lineup_strength = self._lineup_strength(session, away_players)
+        home_continuity_score = self._continuity_score(home_players, home_previous)
+        away_continuity_score = self._continuity_score(away_players, away_previous)
+        home_selected_experience = self._selected_experience(session, home_players)
+        away_selected_experience = self._selected_experience(session, away_players)
+        home_missing_player_penalty = self._missing_player_penalty(session, home_players, home_previous)
+        away_missing_player_penalty = self._missing_player_penalty(session, away_players, away_previous)
         home_injuries = self._team_injuries(session, context, context.home_team.id)
         away_injuries = self._team_injuries(session, context, context.away_team.id)
         key_absences = [
@@ -271,8 +398,14 @@ class FeatureBuilder:
         return {
             "home_named_changes": home_named_changes,
             "away_named_changes": away_named_changes,
+            "home_continuity_score": home_continuity_score,
+            "away_continuity_score": away_continuity_score,
             "home_lineup_strength": home_lineup_strength,
             "away_lineup_strength": away_lineup_strength,
+            "home_selected_experience": home_selected_experience,
+            "away_selected_experience": away_selected_experience,
+            "home_missing_player_penalty": home_missing_player_penalty,
+            "away_missing_player_penalty": away_missing_player_penalty,
             "home_injury_count": home_injuries["injury_count"],
             "away_injury_count": away_injuries["injury_count"],
             "key_absences": key_absences,
@@ -295,6 +428,11 @@ class FeatureBuilder:
             "weather_text": context.weather_snapshot.weather_text if context.weather_snapshot else None,
             "severe_flag": context.weather_snapshot.severe_flag if context.weather_snapshot else False,
         }
+        forecast["wet_weather_flag"] = bool(
+            (forecast["rain_probability_pct"] or 0) >= 50
+            or (forecast["rainfall_mm"] or 0) >= 2
+        )
+        forecast["windy_flag"] = bool((forecast["wind_kmh"] or 0) >= 25)
         home_interstate = (
             context.home_team.state_code is not None
             and context.venue.state_code is not None
@@ -316,6 +454,7 @@ class FeatureBuilder:
             "travel_context": {
                 "home_interstate": home_interstate,
                 "away_interstate": away_interstate,
+                "travel_burden_proxy": int(home_interstate) - int(away_interstate),
             },
             "forecast": forecast,
         }
@@ -345,6 +484,7 @@ class FeatureBuilder:
             "home_implied_probability": home_prob,
             "away_implied_probability": away_prob,
             "bookmaker_count": context.odds_snapshot.bookmaker_count if context.odds_snapshot else 0,
+            "market_confidence": abs(home_prob - 0.5) * 2.0 if home_prob is not None else None,
             "benchmark_home_probability": benchmark_home_probability,
             "benchmark_predicted_margin": benchmark_predicted_margin,
         }
@@ -452,6 +592,19 @@ class FeatureBuilder:
             return 0
         return len(current_ids.symmetric_difference(previous_ids))
 
+    def _continuity_score(
+        self,
+        current_players: list[LineupSnapshotPlayer],
+        previous_players: list[LineupSnapshotPlayer],
+    ) -> float:
+        current_ids = {player.player_id or player.source_player_name for player in current_players}
+        previous_ids = {player.player_id or player.source_player_name for player in previous_players}
+        if not current_ids or not previous_ids:
+            return 0.5
+        retained = len(current_ids.intersection(previous_ids))
+        base = max(len(current_ids), len(previous_ids), 1)
+        return round(retained / base, 3)
+
     def _lineup_strength(
         self,
         session: Session,
@@ -479,6 +632,69 @@ class FeatureBuilder:
                 continue
             ratings.append(mean(samples[:5]))
         return round(sum(ratings), 2)
+
+    def _selected_experience(
+        self,
+        session: Session,
+        players: list[LineupSnapshotPlayer],
+    ) -> float:
+        player_ids = [player.player_id for player in players if player.player_id is not None]
+        if not player_ids:
+            return 0.0
+        stats = session.scalars(
+            select(PlayerMatchStat).where(PlayerMatchStat.player_id.in_(player_ids))
+        ).all()
+        appearances: dict[str, int] = {}
+        for stat in stats:
+            appearances[str(stat.player_id)] = appearances.get(str(stat.player_id), 0) + 1
+        if not appearances:
+            return 0.0
+        return round(sum(appearances.get(str(player_id), 0) for player_id in player_ids) / len(player_ids), 2)
+
+    def _missing_player_penalty(
+        self,
+        session: Session,
+        current_players: list[LineupSnapshotPlayer],
+        previous_players: list[LineupSnapshotPlayer],
+    ) -> float:
+        current_map = {
+            str(player.player_id or player.source_player_name): player
+            for player in current_players
+        }
+        previous_map = {
+            str(player.player_id or player.source_player_name): player
+            for player in previous_players
+        }
+        if not current_map or not previous_map:
+            return 0.0
+        removed = [player for key, player in previous_map.items() if key not in current_map]
+        added = [player for key, player in current_map.items() if key not in previous_map]
+        removed_rating = self._players_strength(session, removed)
+        added_rating = self._players_strength(session, added)
+        return round(max(removed_rating - added_rating, 0.0), 2)
+
+    def _players_strength(self, session: Session, players: list[LineupSnapshotPlayer]) -> float:
+        if not players:
+            return 0.0
+        player_ids = [player.player_id for player in players if player.player_id is not None]
+        if not player_ids:
+            return float(len(players))
+        stats = session.scalars(
+            select(PlayerMatchStat)
+            .where(PlayerMatchStat.player_id.in_(player_ids))
+            .order_by(PlayerMatchStat.created_at.desc())
+            .limit(max(len(player_ids) * 5, 1))
+        ).all()
+        ratings_by_player: dict[str, list[float]] = {}
+        for stat in stats:
+            ratings_by_player.setdefault(str(stat.player_id), []).append(
+                _extract_player_rating(stat.stats)
+            )
+        total = 0.0
+        for player_id in player_ids:
+            samples = ratings_by_player.get(str(player_id))
+            total += mean(samples[:5]) if samples else 1.0
+        return total
 
     def _team_injuries(self, session: Session, context: LoadedMatchContext, team_id) -> dict[str, Any]:
         if context.injury_snapshot is None:

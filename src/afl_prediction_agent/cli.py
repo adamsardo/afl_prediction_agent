@@ -6,7 +6,7 @@ from afl_prediction_agent.agents.codex_app_server import get_codex_app_server_cl
 from afl_prediction_agent.configuration import ensure_prompt_set_seeded, ensure_run_config_seeded
 from afl_prediction_agent.core.db.base import Base
 from afl_prediction_agent.core.db.session import SessionLocal, engine
-from afl_prediction_agent.orchestration.round_runs import EvaluationService, RoundRunService
+from afl_prediction_agent.orchestration.round_runs import EvaluationService, ReplayService, RoundRunService
 from afl_prediction_agent.sources.service import RoundSourceSyncService
 
 
@@ -63,6 +63,40 @@ def run_round(
         )
         session.commit()
         typer.echo(f"Completed run {run.id} for round {round_id}.")
+
+
+@app.command("replay-round")
+def replay_round(
+    round_id: str,
+    config_name: str = "v1_agentic_default",
+    lock_timestamp: str | None = None,
+) -> None:
+    with SessionLocal() as session:
+        service = ReplayService(session)
+        parsed_lock_timestamp = None
+        if lock_timestamp:
+            from datetime import datetime
+
+            parsed_lock_timestamp = datetime.fromisoformat(lock_timestamp.replace("Z", "+00:00"))
+        run = service.replay_round(
+            round_id=round_id,
+            config_name=config_name,
+            lock_timestamp=parsed_lock_timestamp,
+        )
+        session.commit()
+        typer.echo(f"Completed replay run {run.id} for round {round_id}.")
+
+
+@app.command("replay-season")
+def replay_season(
+    season_id: str,
+    config_name: str = "v1_agentic_default",
+) -> None:
+    with SessionLocal() as session:
+        service = ReplayService(session)
+        runs = service.replay_season(season_id=season_id, config_name=config_name)
+        session.commit()
+        typer.echo(f"Completed {len(runs)} replay runs for season {season_id}.")
 
 
 @app.command("evaluate-run")

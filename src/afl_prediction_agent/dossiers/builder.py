@@ -59,8 +59,9 @@ class DossierBuilder:
             uncertainties=feature_result.uncertainties,
             source_refs=SourceRefs(
                 lineup_snapshot_ids=[
-                    context.home_lineup.id if context.home_lineup else None,
-                    context.away_lineup.id if context.away_lineup else None,
+                    lineup.id
+                    for lineup in [context.home_lineup, context.away_lineup]
+                    if lineup is not None
                 ],
                 injury_snapshot_id=context.injury_snapshot.id if context.injury_snapshot else None,
                 weather_snapshot_id=context.weather_snapshot.id if context.weather_snapshot else None,

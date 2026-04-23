@@ -250,8 +250,18 @@ class HeuristicAdapter(LLMAdapter):
                     analyst_home += signal.strength
                 elif signal.leans_to == "away":
                     analyst_away += signal.strength
-        case_home = sum(point.strength for point in cases["home_case_v1"].strongest_points)
-        case_away = sum(point.strength for point in cases["away_case_v1"].strongest_points)
+        home_case = cases.get("home_case_v1")
+        away_case = cases.get("away_case_v1")
+        case_home = (
+            sum(point.strength for point in home_case.strongest_points)
+            if home_case is not None
+            else 0.0
+        )
+        case_away = (
+            sum(point.strength for point in away_case.strongest_points)
+            if away_case is not None
+            else 0.0
+        )
         home_probability = (
             baseline_home * 0.5
             + market_home * 0.3

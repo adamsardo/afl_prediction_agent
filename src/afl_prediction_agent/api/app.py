@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from afl_prediction_agent.contracts import RunRoundRequest
 from afl_prediction_agent.core.db.session import get_session
 from afl_prediction_agent.core.settings import get_settings
-from afl_prediction_agent.orchestration.round_runs import EvaluationService, RoundRunService
+from afl_prediction_agent.orchestration.round_runs import EvaluationService, ReplayService, RoundRunService
 
 
 settings = get_settings()
@@ -54,9 +54,27 @@ def run_round(round_id: str, payload: RunRoundRequest, session: Session = Depend
             config_name=payload.config_name,
             lock_timestamp=payload.lock_timestamp,
             notes=payload.notes,
+            fetch_sources=payload.fetch_sources,
         )
         session.commit()
         return service.get_run_detail(run.id)
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/rounds/{round_id}/replay")
+def replay_round(round_id: str, payload: RunRoundRequest, session: Session = Depends(get_session)):
+    service = ReplayService(session)
+    run_service = RoundRunService(session)
+    try:
+        run = service.replay_round(
+            round_id=round_id,
+            config_name=payload.config_name,
+            lock_timestamp=payload.lock_timestamp,
+        )
+        session.commit()
+        return run_service.get_run_detail(run.id)
     except Exception as exc:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc

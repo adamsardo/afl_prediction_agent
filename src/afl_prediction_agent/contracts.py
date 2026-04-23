@@ -63,8 +63,14 @@ class FormSection(StrictModel):
 class SelectionSection(StrictModel):
     home_named_changes: int = Field(ge=0)
     away_named_changes: int = Field(ge=0)
+    home_continuity_score: float | None = None
+    away_continuity_score: float | None = None
     home_lineup_strength: float
     away_lineup_strength: float
+    home_selected_experience: float | None = None
+    away_selected_experience: float | None = None
+    home_missing_player_penalty: float | None = None
+    away_missing_player_penalty: float | None = None
     key_absences: list[dict[str, Any]]
 
 
@@ -78,6 +84,8 @@ class MarketSection(StrictModel):
     home_implied_probability: float | None = Field(default=None, ge=0.0, le=1.0)
     away_implied_probability: float | None = Field(default=None, ge=0.0, le=1.0)
     bookmaker_count: int = Field(ge=0)
+    market_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    baseline_disagreement: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def validate_probability_pair(self) -> "MarketSection":
@@ -207,6 +215,7 @@ class RunRoundRequest(StrictModel):
     config_name: str
     lock_timestamp: datetime | None = None
     notes: str | None = None
+    fetch_sources: bool = False
 
 
 class RoundRunSummaryResponse(StrictModel):
@@ -224,13 +233,33 @@ class RunDetailResponse(StrictModel):
     status: str
     lock_timestamp: datetime
     match_count: int
+    eligible_match_count: int = 0
+    skipped_match_count: int = 0
+    processed_match_count: int = 0
+    baseline_only_match_count: int = 0
     verdict_count: int
     created_at: datetime
     completed_at: datetime | None = None
 
 
 class MatchRunDetailResponse(StrictModel):
+    run_id: uuid.UUID
     match_id: uuid.UUID
+    season_year: int | None = None
+    round_number: int | None = None
+    home_team_name: str | None = None
+    away_team_name: str | None = None
+    venue_name: str | None = None
+    prediction_lock_timestamp: datetime | None = None
+    match_status: Literal["completed", "baseline_only", "skipped", "failed", "pending"]
+    skip_reason: str | None = None
+    analyst_summaries: dict[str, str] = Field(default_factory=dict)
+    case_summaries: dict[str, str] = Field(default_factory=dict)
+    bookmaker_snapshot: dict[str, Any] | None = None
+    squiggle_snapshot: dict[str, Any] | None = None
+    final_decision_model_version: str | None = None
+    prompt_version_set: str | None = None
+    feature_version: str | None = None
     dossier: dict[str, Any] | None = None
     baseline_prediction: dict[str, Any] | None = None
     final_verdict: dict[str, Any] | None = None
