@@ -1,0 +1,25 @@
+{
+  "config_name": "v1_agentic_codex_gpt54",
+  "feature_version": "features_v1",
+  "winner_model_version": "winner_lr_v1",
+  "margin_model_version": "margin_ridge_v1",
+  "prompt_set_version": "prompt_set_v1",
+  "analyst_model": {
+    "provider": "codex_app_server",
+    "model": "gpt-5.4",
+    "temperature": null,
+    "reasoning_effort": "xhigh"
+  },
+  "case_model": {
+    "provider": "codex_app_server",
+    "model": "gpt-5.4",
+    "temperature": null,
+    "reasoning_effort": "xhigh"
+  },
+  "final_model": {
+    "provider": "codex_app_server",
+    "model": "gpt-5.4",
+    "temperature": null,
+    "reasoning_effort": "xhigh"
+  }
+}

@@ -1,0 +1,2 @@
+[console_scripts]
+afl-agent = afl_prediction_agent.cli:app

@@ -1,0 +1,22 @@
+{
+  "config_name": "v1_agentic_default",
+  "feature_version": "features_v1",
+  "winner_model_version": "winner_lr_v1",
+  "margin_model_version": "margin_ridge_v1",
+  "prompt_set_version": "prompt_set_v1",
+  "analyst_model": {
+    "provider": "heuristic",
+    "model": "heuristic-analyst-v1",
+    "temperature": 0.2
+  },
+  "case_model": {
+    "provider": "heuristic",
+    "model": "heuristic-case-v1",
+    "temperature": 0.3
+  },
+  "final_model": {
+    "provider": "heuristic",
+    "model": "heuristic-final-v1",
+    "temperature": 0.2
+  }
+}

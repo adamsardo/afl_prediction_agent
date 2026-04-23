@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "afl-prediction-agent"
+version = "0.1.0"
+description = "Agentic AFL round prediction system with reproducible snapshots and deterministic baselines."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.14.0",
+  "fastapi>=0.115.0",
+  "joblib>=1.4.0",
+  "numpy>=2.1.0",
+  "polars>=1.17.0",
+  "psycopg[binary]>=3.2.0",
+  "pydantic>=2.10.0",
+  "pydantic-settings>=2.7.0",
+  "scikit-learn>=1.6.0",
+  "sqlalchemy>=2.0.36",
+  "typer>=0.15.0",
+  "uvicorn>=0.34.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28.0",
+  "pytest>=8.3.0",
+  "pytest-cov>=6.0.0",
+]
+
+[project.scripts]
+afl-agent = "afl_prediction_agent.cli:app"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

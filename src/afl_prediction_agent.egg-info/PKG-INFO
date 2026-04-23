@@ -1,0 +1,76 @@
+Metadata-Version: 2.4
+Name: afl-prediction-agent
+Version: 0.1.0
+Summary: Agentic AFL round prediction system with reproducible snapshots and deterministic baselines.
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: alembic>=1.14.0
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: joblib>=1.4.0
+Requires-Dist: numpy>=2.1.0
+Requires-Dist: polars>=1.17.0
+Requires-Dist: psycopg[binary]>=3.2.0
+Requires-Dist: pydantic>=2.10.0
+Requires-Dist: pydantic-settings>=2.7.0
+Requires-Dist: scikit-learn>=1.6.0
+Requires-Dist: sqlalchemy>=2.0.36
+Requires-Dist: typer>=0.15.0
+Requires-Dist: uvicorn>=0.34.0
+Provides-Extra: dev
+Requires-Dist: httpx>=0.28.0; extra == "dev"
+Requires-Dist: pytest>=8.3.0; extra == "dev"
+Requires-Dist: pytest-cov>=6.0.0; extra == "dev"
+
+# AFL Prediction Agent
+
+Spec-driven implementation of the AFL prediction system described in:
+
+1. `afl_prediction_agent_v_1_spec.md`
+2. `afl_prediction_agent_implementation_plan_and_schema.md`
+
+This repo now includes:
+
+1. SQLAlchemy ORM models for the v1 schema
+2. Alembic migration scaffolding
+3. Pydantic dossier and agent output contracts
+4. Deterministic feature and baseline services
+5. A provider-abstracted agent runner with a deterministic heuristic adapter
+6. A round orchestration service
+7. FastAPI inspection endpoints
+8. Typer CLI entrypoints
+
+## Quick start
+
+1. Install the package:
+
+```bash
+python3 -m pip install -e ".[dev]"
+```
+
+2. Set a database URL:
+
+```bash
+export AFL_AGENT_DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/afl_agent"
+```
+
+3. Run migrations:
+
+```bash
+alembic upgrade head
+```
+
+4. Seed prompts and run config:
+
+```bash
+afl-agent seed-config
+```
+
+5. Start the API:
+
+```bash
+uvicorn afl_prediction_agent.api.app:app --reload
+```
+
+## Current scope
+
+The codebase implements the data spine, schema, typed contracts, run orchestration, evaluation flow, and a deterministic first-pass agent provider. Source-specific AFL/BOM/Odds scrapers are left as integration points and can write into the ingestion services already provided here.
