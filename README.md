@@ -183,6 +183,8 @@ Optional but recommended:
 ```bash
 AFL_AGENT_ODDS_API_KEY=your_the_odds_api_key
 AFL_AGENT_ODDS_AU_BOOKMAKERS=tab,sportsbet,neds,ladbrokes_au,betfair_ex_au,betr_au,pointsbetau,bluebet
+AFL_AGENT_MAX_PARALLEL_MATCHES=4
+AFL_AGENT_MAX_PARALLEL_AGENT_STEPS=4
 ```
 
 Only set this if you want to override the default Squiggle header:
@@ -190,6 +192,8 @@ Only set this if you want to override the default Squiggle header:
 ```bash
 AFL_AGENT_SQUIGGLE_USER_AGENT=AFL Prediction Agent - your-real-email@example.com
 ```
+
+`AFL_AGENT_MAX_PARALLEL_MATCHES` controls how many eligible matches can run at once. `AFL_AGENT_MAX_PARALLEL_AGENT_STEPS` controls the within-match agent fan-out for analyst and case waves.
 
 ### 2. Install Python dependencies
 

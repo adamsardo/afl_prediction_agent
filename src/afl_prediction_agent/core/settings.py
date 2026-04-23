@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     codex_bin: str = "codex"
     codex_startup_timeout_seconds: float = 15.0
     codex_turn_timeout_seconds: float = 120.0
+    max_parallel_matches: int = 4
+    max_parallel_agent_steps: int = 4
     fitzroy_rscript_bin: str = "Rscript"
     fitzroy_timeout_seconds: float = 120.0
     source_http_timeout_seconds: float = 20.0
