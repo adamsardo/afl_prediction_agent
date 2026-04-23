@@ -22,6 +22,7 @@ from afl_prediction_agent.core.db.base import utcnow
 from afl_prediction_agent.dossiers.builder import DossierBuilder
 from afl_prediction_agent.features.builder import FeatureBuilder
 from afl_prediction_agent.models.baseline import DeterministicBaselineService
+from afl_prediction_agent.sources.service import RoundSourceSyncService
 from afl_prediction_agent.storage.context import load_match_context
 from afl_prediction_agent.storage.models import (
     AgentStep,
@@ -63,6 +64,7 @@ class RoundRunService:
         config_name: str,
         lock_timestamp: datetime | None = None,
         notes: str | None = None,
+        fetch_sources: bool = False,
     ) -> RoundRun:
         round_id = _uuid(round_id)
         round_obj = self.session.get(Round, round_id)
@@ -83,6 +85,8 @@ class RoundRunService:
         self.session.flush()
 
         self._run_provider_preflight(round_run=round_run, config=config)
+        if fetch_sources:
+            self._prefetch_round_sources(round_run=round_run)
 
         winner_model_run = BaselineModelRun(
             round_run_id=round_run.id,
@@ -224,6 +228,25 @@ class RoundRunService:
             round_run.completed_at = utcnow()
             self.session.flush()
             raise
+
+    def _prefetch_round_sources(self, *, round_run: RoundRun) -> None:
+        sync_service = RoundSourceSyncService(self.session)
+        sync_service.snapshot_round(round_id=round_run.round_id, round_run_id=round_run.id)
+        matches = self.session.scalars(
+            select(Match).where(Match.round_id == round_run.round_id).order_by(Match.scheduled_at.asc())
+        ).all()
+        missing_lineups: list[str] = []
+        for match in matches:
+            context = load_match_context(
+                self.session,
+                match=match,
+                lock_timestamp=round_run.lock_timestamp,
+                round_run_id=round_run.id,
+            )
+            if context.home_lineup is None or context.away_lineup is None:
+                missing_lineups.append(str(match.id))
+        if missing_lineups:
+            raise ValueError(f"Official lineups missing for matches: {', '.join(missing_lineups)}")
 
     def list_round_runs(self, round_id) -> list[RoundRunSummaryResponse]:
         runs = self.session.scalars(

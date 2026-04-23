@@ -5,7 +5,9 @@ Summary: Agentic AFL round prediction system with reproducible snapshots and det
 Requires-Python: >=3.12
 Description-Content-Type: text/markdown
 Requires-Dist: alembic>=1.14.0
+Requires-Dist: beautifulsoup4>=4.13.0
 Requires-Dist: fastapi>=0.115.0
+Requires-Dist: httpx>=0.28.0
 Requires-Dist: joblib>=1.4.0
 Requires-Dist: numpy>=2.1.0
 Requires-Dist: polars>=1.17.0
@@ -17,7 +19,6 @@ Requires-Dist: sqlalchemy>=2.0.36
 Requires-Dist: typer>=0.15.0
 Requires-Dist: uvicorn>=0.34.0
 Provides-Extra: dev
-Requires-Dist: httpx>=0.28.0; extra == "dev"
 Requires-Dist: pytest>=8.3.0; extra == "dev"
 Requires-Dist: pytest-cov>=6.0.0; extra == "dev"
 
@@ -44,31 +45,46 @@ This repo now includes:
 1. Install the package:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 python3 -m pip install -e ".[dev]"
 ```
 
-2. Set a database URL:
+2. Start local Postgres on Docker:
+
+```bash
+docker compose up -d postgres
+```
+
+3. Use the checked-in local env file, or export the same database URL manually:
 
 ```bash
 export AFL_AGENT_DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/afl_agent"
 ```
 
-3. Run migrations:
+4. Run migrations:
 
 ```bash
 alembic upgrade head
 ```
 
-4. Seed prompts and run config:
+5. Seed prompts and run configs:
 
 ```bash
-afl-agent seed-config
+afl-agent seed-config --config-name v1_agentic_default
+afl-agent seed-config --config-name v1_agentic_codex_gpt54
 ```
 
-5. Start the API:
+6. Start the API:
 
 ```bash
 uvicorn afl_prediction_agent.api.app:app --reload
+```
+
+7. Optional Codex auth status check:
+
+```bash
+afl-agent auth codex status
 ```
 
 ## Current scope

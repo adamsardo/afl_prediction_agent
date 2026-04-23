@@ -1,0 +1,156 @@
+[
+  {
+    "venue_name": "MCG",
+    "aliases": ["Melbourne Cricket Ground", "MCG"],
+    "city": "Melbourne",
+    "state_code": "VIC",
+    "station_id": "95936",
+    "forecast_product_id": "IDV10753",
+    "forecast_location_name": "Melbourne"
+  },
+  {
+    "venue_name": "Marvel Stadium",
+    "aliases": ["Docklands", "Docklands Stadium", "Marvel Stadium"],
+    "city": "Melbourne",
+    "state_code": "VIC",
+    "station_id": "95936",
+    "forecast_product_id": "IDV10753",
+    "forecast_location_name": "Melbourne"
+  },
+  {
+    "venue_name": "GMHBA Stadium",
+    "aliases": ["Kardinia Park", "GMHBA Stadium", "Geelong"],
+    "city": "Geelong",
+    "state_code": "VIC",
+    "station_id": "94857",
+    "forecast_product_id": "IDV10753",
+    "forecast_location_name": "Geelong"
+  },
+  {
+    "venue_name": "Adelaide Oval",
+    "aliases": ["Adelaide Oval"],
+    "city": "Adelaide",
+    "state_code": "SA",
+    "station_id": "94648",
+    "forecast_product_id": null,
+    "forecast_location_name": "Adelaide"
+  },
+  {
+    "venue_name": "Norwood Oval",
+    "aliases": ["Norwood Oval", "Coopers Stadium"],
+    "city": "Adelaide",
+    "state_code": "SA",
+    "station_id": "94648",
+    "forecast_product_id": null,
+    "forecast_location_name": "Adelaide"
+  },
+  {
+    "venue_name": "Barossa Park",
+    "aliases": ["Barossa Park", "Lyndoch Recreation Park"],
+    "city": "Barossa",
+    "state_code": "SA",
+    "station_id": "023372",
+    "forecast_product_id": null,
+    "forecast_location_name": "Nuriootpa",
+    "forecast_district_name": "Mount Lofty Ranges"
+  },
+  {
+    "venue_name": "Optus Stadium",
+    "aliases": ["Optus Stadium", "Perth Stadium"],
+    "city": "Perth",
+    "state_code": "WA",
+    "station_id": "94608",
+    "forecast_product_id": null,
+    "forecast_location_name": "Perth"
+  },
+  {
+    "venue_name": "The Gabba",
+    "aliases": ["Gabba", "The Gabba"],
+    "city": "Brisbane",
+    "state_code": "QLD",
+    "station_id": "94576",
+    "forecast_product_id": null,
+    "forecast_location_name": "Brisbane"
+  },
+  {
+    "venue_name": "People First Stadium",
+    "aliases": ["Heritage Bank Stadium", "Metricon Stadium", "Carrara", "People First Stadium"],
+    "city": "Gold Coast",
+    "state_code": "QLD",
+    "station_id": "94580",
+    "forecast_product_id": null,
+    "forecast_location_name": "Gold Coast"
+  },
+  {
+    "venue_name": "SCG",
+    "aliases": ["Sydney Cricket Ground", "SCG"],
+    "city": "Sydney",
+    "state_code": "NSW",
+    "station_id": "066006",
+    "forecast_product_id": null,
+    "forecast_location_name": "Sydney"
+  },
+  {
+    "venue_name": "ENGIE Stadium",
+    "aliases": ["Sydney Showground Stadium", "GIANTS Stadium", "ENGIE Stadium"],
+    "city": "Sydney Olympic Park",
+    "state_code": "NSW",
+    "station_id": "95765",
+    "forecast_product_id": null,
+    "forecast_location_name": "Parramatta"
+  },
+  {
+    "venue_name": "TIO Stadium",
+    "aliases": ["TIO Stadium"],
+    "city": "Darwin",
+    "state_code": "NT",
+    "station_id": "95122",
+    "forecast_product_id": null,
+    "forecast_location_name": "Darwin"
+  },
+  {
+    "venue_name": "TIO Traeger Park",
+    "aliases": ["Traeger Park", "TIO Traeger Park"],
+    "city": "Alice Springs",
+    "state_code": "NT",
+    "station_id": "94326",
+    "forecast_product_id": null,
+    "forecast_location_name": "Alice Springs"
+  },
+  {
+    "venue_name": "Blundstone Arena",
+    "aliases": ["Bellerive Oval", "Blundstone Arena"],
+    "city": "Hobart",
+    "state_code": "TAS",
+    "station_id": "94970",
+    "forecast_product_id": null,
+    "forecast_location_name": "Hobart"
+  },
+  {
+    "venue_name": "UTAS Stadium",
+    "aliases": ["York Park", "UTAS Stadium"],
+    "city": "Launceston",
+    "state_code": "TAS",
+    "station_id": "94969",
+    "forecast_product_id": null,
+    "forecast_location_name": "Launceston"
+  },
+  {
+    "venue_name": "Manuka Oval",
+    "aliases": ["Manuka Oval"],
+    "city": "Canberra",
+    "state_code": "ACT",
+    "station_id": "070246",
+    "forecast_product_id": null,
+    "forecast_location_name": "Canberra"
+  },
+  {
+    "venue_name": "Cazalys Stadium",
+    "aliases": ["Cazalys Stadium"],
+    "city": "Cairns",
+    "state_code": "QLD",
+    "station_id": "94288",
+    "forecast_product_id": null,
+    "forecast_location_name": "Cairns"
+  }
+]

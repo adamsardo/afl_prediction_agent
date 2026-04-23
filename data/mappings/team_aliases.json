@@ -1,0 +1,20 @@
+{
+  "Adelaide Crows": ["Adelaide", "Crows", "Adelaide Crows"],
+  "Brisbane Lions": ["Brisbane", "Lions", "Brisbane Lions"],
+  "Carlton": ["Carlton", "Carlton Blues", "Blues"],
+  "Collingwood": ["Collingwood", "Collingwood Magpies", "Magpies"],
+  "Essendon": ["Essendon", "Essendon Bombers", "Bombers"],
+  "Fremantle": ["Fremantle", "Fremantle Dockers", "Dockers"],
+  "Geelong": ["Geelong", "Geelong Cats", "Cats"],
+  "Gold Coast Suns": ["Gold Coast", "Gold Coast SUNS", "Gold Coast Suns", "Suns"],
+  "GWS Giants": ["GWS", "GWS Giants", "Giants", "Greater Western Sydney"],
+  "Hawthorn": ["Hawthorn", "Hawthorn Hawks", "Hawks"],
+  "Melbourne": ["Melbourne", "Melbourne Demons", "Demons"],
+  "North Melbourne": ["North Melbourne", "North Melbourne Kangaroos", "Kangaroos", "North"],
+  "Port Adelaide": ["Port Adelaide", "Port Adelaide Power", "Power"],
+  "Richmond": ["Richmond", "Richmond Tigers", "Tigers"],
+  "St Kilda": ["St Kilda", "St Kilda Saints", "Saints"],
+  "Sydney Swans": ["Sydney", "Sydney Swans", "Swans"],
+  "West Coast Eagles": ["West Coast", "West Coast Eagles", "Eagles"],
+  "Western Bulldogs": ["Western Bulldogs", "Bulldogs", "Footscray"]
+}

@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     codex_bin: str = "codex"
     codex_startup_timeout_seconds: float = 15.0
     codex_turn_timeout_seconds: float = 120.0
+    fitzroy_rscript_bin: str = "Rscript"
+    fitzroy_timeout_seconds: float = 120.0
+    source_http_timeout_seconds: float = 20.0
+    source_retry_attempts: int = 2
+    odds_api_key: str | None = None
+    odds_au_bookmakers: str | None = None
+    squiggle_benchmark_source: str = "aggregate"
 
 
 @lru_cache(maxsize=1)

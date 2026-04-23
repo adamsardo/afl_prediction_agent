@@ -9,6 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from afl_prediction_agent.storage.models import (
+    AuditEvent,
+    BenchmarkPrediction,
     Competition,
     InjurySnapshot,
     InjurySnapshotEntry,
@@ -22,8 +24,10 @@ from afl_prediction_agent.storage.models import (
     Season,
     SourceFetchLog,
     Team,
+    TeamMatchStat,
     Venue,
     WeatherSnapshot,
+    PlayerMatchStat,
 )
 
 
@@ -74,7 +78,7 @@ class SourceFetchLogger:
         *,
         status: str,
         response_meta: dict[str, Any] | None = None,
-        raw_payload: dict[str, Any] | None = None,
+        raw_payload: Any | None = None,
         error_message: str | None = None,
     ) -> SourceFetchLog:
         log.status = status
@@ -265,7 +269,10 @@ class FixtureIngestionService:
         actual_margin = None
         if home_score is not None and away_score is not None:
             actual_margin = home_score - away_score
-            winning_team_id = home_team_id if home_score > away_score else away_team_id
+            if home_score > away_score:
+                winning_team_id = home_team_id
+            elif away_score > home_score:
+                winning_team_id = away_team_id
         if match is None:
             match = Match(
                 season_id=season_id,
@@ -336,6 +343,32 @@ class SnapshotIngestionService:
             )
         self.session.flush()
         return snapshot
+
+    def store_benchmark_prediction(
+        self,
+        *,
+        round_run_id,
+        match_id,
+        source_name: str,
+        predicted_winner_team_id=None,
+        home_win_probability: float | None = None,
+        away_win_probability: float | None = None,
+        predicted_margin: float | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> BenchmarkPrediction:
+        row = BenchmarkPrediction(
+            round_run_id=round_run_id,
+            match_id=match_id,
+            source_name=source_name,
+            predicted_winner_team_id=predicted_winner_team_id,
+            home_win_probability=home_win_probability,
+            away_win_probability=away_win_probability,
+            predicted_margin=predicted_margin,
+            payload=payload or {},
+        )
+        self.session.add(row)
+        self.session.flush()
+        return row
 
     def store_injury_snapshot(
         self,
@@ -453,3 +486,85 @@ class SnapshotIngestionService:
             )
         self.session.flush()
         return snapshot
+
+    def create_audit_event(
+        self,
+        *,
+        event_type: str,
+        payload: dict[str, Any],
+        round_run_id=None,
+        match_id=None,
+    ) -> AuditEvent:
+        event = AuditEvent(
+            round_run_id=round_run_id,
+            match_id=match_id,
+            event_type=event_type,
+            payload=payload,
+        )
+        self.session.add(event)
+        self.session.flush()
+        return event
+
+
+class StatsIngestionService:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def upsert_team_match_stat(
+        self,
+        *,
+        match_id,
+        team_id,
+        source_name: str,
+        stats: dict[str, Any],
+    ) -> TeamMatchStat:
+        row = self.session.scalar(
+            select(TeamMatchStat).where(
+                TeamMatchStat.match_id == match_id,
+                TeamMatchStat.team_id == team_id,
+                TeamMatchStat.source_name == source_name,
+            )
+        )
+        if row is None:
+            row = TeamMatchStat(
+                match_id=match_id,
+                team_id=team_id,
+                source_name=source_name,
+                stats=stats,
+            )
+            self.session.add(row)
+        else:
+            row.stats = stats
+        self.session.flush()
+        return row
+
+    def upsert_player_match_stat(
+        self,
+        *,
+        match_id,
+        team_id,
+        player_id,
+        source_name: str,
+        stats: dict[str, Any],
+    ) -> PlayerMatchStat:
+        row = self.session.scalar(
+            select(PlayerMatchStat).where(
+                PlayerMatchStat.match_id == match_id,
+                PlayerMatchStat.player_id == player_id,
+                PlayerMatchStat.source_name == source_name,
+            )
+        )
+        if row is None:
+            row = PlayerMatchStat(
+                match_id=match_id,
+                team_id=team_id,
+                player_id=player_id,
+                source_name=source_name,
+                stats=stats,
+            )
+            self.session.add(row)
+        else:
+            row.team_id = team_id
+            row.stats = stats
+        self.session.flush()
+        return row

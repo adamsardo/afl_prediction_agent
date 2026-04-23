@@ -65,14 +65,16 @@ def ensure_run_config_seeded(session: Session, config_name: str) -> RunConfig:
 
 def ensure_prompt_set_seeded(session: Session, prompt_set_version: str) -> None:
     templates = load_prompt_templates(prompt_set_version)
-    for step_name, template_text in templates.items():
-        existing = session.scalar(
-            select(PromptTemplate).where(
+    existing_steps = {
+        step_name
+        for step_name in session.scalars(
+            select(PromptTemplate.step_name).where(
                 PromptTemplate.prompt_set_version == prompt_set_version,
-                PromptTemplate.step_name == step_name,
             )
         )
-        if existing is not None:
+    }
+    for step_name, template_text in templates.items():
+        if step_name in existing_steps:
             continue
         session.add(
             PromptTemplate(
@@ -83,3 +85,4 @@ def ensure_prompt_set_seeded(session: Session, prompt_set_version: str) -> None:
                 is_active=True,
             )
         )
+        existing_steps.add(step_name)

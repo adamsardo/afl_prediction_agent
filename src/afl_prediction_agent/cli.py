@@ -7,13 +7,16 @@ from afl_prediction_agent.configuration import ensure_prompt_set_seeded, ensure_
 from afl_prediction_agent.core.db.base import Base
 from afl_prediction_agent.core.db.session import SessionLocal, engine
 from afl_prediction_agent.orchestration.round_runs import EvaluationService, RoundRunService
+from afl_prediction_agent.sources.service import RoundSourceSyncService
 
 
 app = typer.Typer(help="AFL Prediction Agent CLI")
 auth_app = typer.Typer(help="Authentication helpers.")
 codex_auth_app = typer.Typer(help="Codex app-server auth helpers.")
+ingest_app = typer.Typer(help="Source ingestion helpers.")
 auth_app.add_typer(codex_auth_app, name="codex")
 app.add_typer(auth_app, name="auth")
+app.add_typer(ingest_app, name="ingest")
 
 
 @app.command("init-db")
@@ -44,10 +47,20 @@ def run_round(
     round_id: str,
     config_name: str = "v1_agentic_default",
     notes: str | None = None,
+    fetch_sources: bool = typer.Option(
+        True,
+        "--fetch-sources/--no-fetch-sources",
+        help="Capture source snapshots before running the round pipeline.",
+    ),
 ) -> None:
     with SessionLocal() as session:
         service = RoundRunService(session)
-        run = service.run_round(round_id=round_id, config_name=config_name, notes=notes)
+        run = service.run_round(
+            round_id=round_id,
+            config_name=config_name,
+            notes=notes,
+            fetch_sources=fetch_sources,
+        )
         session.commit()
         typer.echo(f"Completed run {run.id} for round {round_id}.")
 
@@ -112,3 +125,128 @@ def codex_logout() -> None:
     client = get_codex_app_server_client()
     client.logout()
     typer.echo("Logged out of Codex app-server ChatGPT auth.")
+
+
+@ingest_app.command("fixtures")
+def ingest_fixtures(
+    season_year: int,
+    round_number: int | None = None,
+    use_archive_fallback: bool = False,
+) -> None:
+    with SessionLocal() as session:
+        summary = RoundSourceSyncService(session).ingest_fixtures(
+            season_year=season_year,
+            round_number=round_number,
+            use_archive_fallback=use_archive_fallback,
+        )
+        session.commit()
+        typer.echo(f"{summary.source_name}: created={summary.created} skipped={summary.skipped}")
+
+
+@ingest_app.command("results")
+def ingest_results(
+    season_year: int,
+    round_number: int | None = None,
+    use_archive_fallback: bool = False,
+) -> None:
+    with SessionLocal() as session:
+        summary = RoundSourceSyncService(session).ingest_results(
+            season_year=season_year,
+            round_number=round_number,
+            use_archive_fallback=use_archive_fallback,
+        )
+        session.commit()
+        typer.echo(f"{summary.source_name}: created={summary.created} skipped={summary.skipped}")
+
+
+@ingest_app.command("lineups")
+def ingest_lineups(round_id: str) -> None:
+    with SessionLocal() as session:
+        summary = RoundSourceSyncService(session).ingest_lineups(round_id=round_id)
+        session.commit()
+        typer.echo(f"{summary.source_name}: created={summary.created} skipped={summary.skipped}")
+
+
+@ingest_app.command("stats")
+def ingest_stats(
+    season_year: int,
+    round_number: int | None = None,
+    source_track: str = typer.Option("official", help="official or archive"),
+) -> None:
+    with SessionLocal() as session:
+        summary = RoundSourceSyncService(session).ingest_stats(
+            season_year=season_year,
+            round_number=round_number,
+            source_track=source_track,
+        )
+        session.commit()
+        typer.echo(f"{summary.source_name}: created={summary.created} skipped={summary.skipped}")
+
+
+@ingest_app.command("injuries")
+def ingest_injuries() -> None:
+    with SessionLocal() as session:
+        summaries = RoundSourceSyncService(session).ingest_injuries()
+        session.commit()
+        for summary in summaries:
+            typer.echo(f"{summary.source_name}: created={summary.created} skipped={summary.skipped}")
+
+
+@ingest_app.command("weather")
+def ingest_weather(round_id: str) -> None:
+    with SessionLocal() as session:
+        summary = RoundSourceSyncService(session).ingest_weather(round_id=round_id)
+        session.commit()
+        typer.echo(f"{summary.source_name}: created={summary.created} skipped={summary.skipped}")
+
+
+@ingest_app.command("odds")
+def ingest_odds(round_id: str, as_of: str | None = None) -> None:
+    with SessionLocal() as session:
+        parsed_as_of = None
+        if as_of:
+            from datetime import datetime
+
+            parsed_as_of = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+        summary = RoundSourceSyncService(session).ingest_odds(round_id=round_id, as_of=parsed_as_of)
+        session.commit()
+        typer.echo(f"{summary.source_name}: created={summary.created} skipped={summary.skipped}")
+        if summary.errors:
+            for error in summary.errors:
+                typer.echo(f"error={error}")
+
+
+@ingest_app.command("benchmarks")
+def ingest_benchmarks(round_id: str, run_id: str) -> None:
+    with SessionLocal() as session:
+        summary = RoundSourceSyncService(session).ingest_benchmarks(
+            round_id=round_id,
+            round_run_id=run_id,
+        )
+        session.commit()
+        typer.echo(f"{summary.source_name}: created={summary.created} skipped={summary.skipped}")
+
+
+@ingest_app.command("snapshot-round")
+def snapshot_round(round_id: str, run_id: str | None = None) -> None:
+    with SessionLocal() as session:
+        summaries = RoundSourceSyncService(session).snapshot_round(
+            round_id=round_id,
+            round_run_id=run_id,
+        )
+        session.commit()
+        for summary in summaries:
+            typer.echo(f"{summary.source_name}: created={summary.created} skipped={summary.skipped}")
+
+
+@ingest_app.command("review-unresolved")
+def review_unresolved() -> None:
+    with SessionLocal() as session:
+        review = RoundSourceSyncService(session).review_unresolved()
+        for section, rows in review.items():
+            typer.echo(f"[{section}]")
+            if not rows:
+                typer.echo("none")
+                continue
+            for row in rows:
+                typer.echo(str(row))
