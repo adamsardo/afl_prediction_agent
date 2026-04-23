@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -175,6 +177,12 @@ def _seed_round(session):
 
 
 class FakeCodexClient:
+    def __init__(self, *, delay_seconds: float = 0.0) -> None:
+        self.delay_seconds = delay_seconds
+        self.thread_names: set[str] = set()
+        self.step_names: list[str] = []
+        self._lock = threading.Lock()
+
     def preflight_auth(self) -> CodexAuthSnapshot:
         return CodexAuthSnapshot(
             auth_mode="chatgpt",
@@ -196,6 +204,11 @@ class FakeCodexClient:
         reasoning_effort: str | None,
         output_schema: dict,
     ) -> CodexTurnResult:
+        if self.delay_seconds:
+            time.sleep(self.delay_seconds)
+        with self._lock:
+            self.thread_names.add(threading.current_thread().name)
+            self.step_names.append(step_name)
         dossier = input_json["dossier"]
         home_team_id = dossier["match"]["home_team"]["team_id"]
         away_team_id = dossier["match"]["away_team"]["team_id"]
@@ -308,3 +321,28 @@ def test_round_run_fails_preflight_without_codex_auth(session, monkeypatch) -> N
     service = RoundRunService(session)
     with pytest.raises(CodexAppServerAuthError):
         service.run_round(round_id=target_round.id, config_name="v1_agentic_codex_gpt54")
+
+
+def test_round_run_emits_progress_and_parallelizes_independent_steps(session, monkeypatch) -> None:
+    target_round, _ = _seed_round(session)
+    fake_client = FakeCodexClient(delay_seconds=0.05)
+    progress_messages: list[str] = []
+    monkeypatch.setattr(adapters_module, "get_codex_app_server_client", lambda: fake_client)
+    monkeypatch.setattr(round_runs_module, "get_codex_app_server_client", lambda: fake_client)
+
+    started_at = time.perf_counter()
+    run = RoundRunService(session).run_round(
+        round_id=target_round.id,
+        config_name="v1_agentic_codex_gpt54",
+        progress_callback=progress_messages.append,
+    )
+    elapsed = time.perf_counter() - started_at
+
+    assert run.status == "completed"
+    assert any(message.startswith("Started run ") for message in progress_messages)
+    assert any("Eligible matches: 1/1" in message for message in progress_messages)
+    assert any("starting analyst wave" in message for message in progress_messages)
+    assert any("completed form_analyst_v1" in message for message in progress_messages)
+    assert any("completed final_decision_v1" in message for message in progress_messages)
+    assert len(fake_client.thread_names) >= 2
+    assert elapsed < 0.3

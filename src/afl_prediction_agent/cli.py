@@ -60,9 +60,10 @@ def run_round(
             config_name=config_name,
             notes=notes,
             fetch_sources=fetch_sources,
+            progress_callback=typer.echo,
         )
         session.commit()
-        typer.echo(f"Completed run {run.id} for round {round_id}.")
+        typer.echo(f"Completed run {run.id} for round {round_id} with status={run.status}.")
 
 
 @app.command("replay-round")

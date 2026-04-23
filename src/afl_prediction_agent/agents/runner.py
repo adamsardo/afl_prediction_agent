@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -7,7 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from afl_prediction_agent.agents.adapters import LLMAdapter, build_adapter
+from afl_prediction_agent.agents.adapters import build_adapter
 from afl_prediction_agent.contracts import (
     AnalystResponse,
     CaseAgentResponse,
@@ -41,10 +43,43 @@ class MatchAgentRunResult:
     failed_steps: list[dict[str, Any]]
 
 
+@dataclass(slots=True)
+class PreparedStep:
+    step_name: str
+    step_row: AgentStep
+    rendered_prompt: str
+    input_json: dict[str, Any]
+    settings: ModelSettings
+    schema_type: Any
+
+
+@dataclass(slots=True)
+class StepExecutionResult:
+    output_json: dict[str, Any]
+    tokens_input: int | None
+    tokens_output: int | None
+    provider_meta: dict[str, Any]
+
+
 class AgentPipelineRunner:
-    def __init__(self, session: Session, prompt_set_version: str) -> None:
+    def __init__(
+        self,
+        session: Session,
+        prompt_set_version: str,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+        max_parallel_workers: int = 4,
+    ) -> None:
         self.session = session
         self.prompt_set_version = prompt_set_version
+        self.progress_callback = progress_callback
+        self.executor = ThreadPoolExecutor(
+            max_workers=max_parallel_workers,
+            thread_name_prefix="agent-step",
+        )
+
+    def close(self) -> None:
+        self.executor.shutdown(wait=True)
 
     def run_for_match(
         self,
@@ -53,126 +88,85 @@ class AgentPipelineRunner:
         match_id,
         dossier: MatchDossierContract,
         config: RunConfigFile,
+        match_label: str | None = None,
     ) -> MatchAgentRunResult:
         analysts: dict[str, dict[str, Any]] = {}
         cases: dict[str, dict[str, Any]] = {}
         failed_steps: list[dict[str, Any]] = []
-        analyst_adapter = build_adapter(config.analyst_model.provider)
-        case_adapter = build_adapter(config.case_model.provider)
-        final_adapter = build_adapter(config.final_model.provider)
+        dossier_json = dossier.model_dump(mode="json")
 
-        for step_name in ANALYST_STEP_NAMES:
-            try:
-                result = self._execute_step(
-                    round_run_id=round_run_id,
-                    match_id=match_id,
-                    step_name=step_name,
-                    input_json={"dossier": dossier.model_dump(mode="json")},
-                    settings=config.analyst_model,
-                    adapter=analyst_adapter,
-                    schema_type=AnalystResponse,
-                )
-                analysts[step_name] = result
-                self._record_validation(
-                    round_run_id=round_run_id,
-                    match_id=match_id,
-                    component_name=step_name,
-                    validation_status="passed",
-                )
-            except Exception as exc:
-                failed_steps.append({"step_name": step_name, "error": str(exc)})
-                self._record_validation(
-                    round_run_id=round_run_id,
-                    match_id=match_id,
-                    component_name=step_name,
-                    validation_status="failed",
-                    errors=[{"message": str(exc)}],
-                )
+        self._emit_progress(match_label, "starting analyst wave")
+        analyst_results, analyst_failures = self._execute_parallel_batch(
+            round_run_id=round_run_id,
+            match_id=match_id,
+            step_names=ANALYST_STEP_NAMES,
+            input_json_factory=lambda _step_name: {"dossier": dossier_json},
+            settings=config.analyst_model,
+            schema_type=AnalystResponse,
+            match_label=match_label,
+        )
+        analysts.update(analyst_results)
+        failed_steps.extend(analyst_failures)
 
-        for step_name in CASE_STEP_NAMES:
-            try:
-                result = self._execute_step(
-                    round_run_id=round_run_id,
-                    match_id=match_id,
-                    step_name=step_name,
-                    input_json={
-                        "dossier": dossier.model_dump(mode="json"),
-                        "analysts": analysts,
-                    },
-                    settings=config.case_model,
-                    adapter=case_adapter,
-                    schema_type=CaseAgentResponse,
-                )
-                cases[step_name] = result
-                self._record_validation(
-                    round_run_id=round_run_id,
-                    match_id=match_id,
-                    component_name=step_name,
-                    validation_status="passed",
-                )
-            except Exception as exc:
-                failed_steps.append({"step_name": step_name, "error": str(exc)})
-                self._record_validation(
-                    round_run_id=round_run_id,
-                    match_id=match_id,
-                    component_name=step_name,
-                    validation_status="failed",
-                    errors=[{"message": str(exc)}],
-                )
+        self._emit_progress(match_label, "starting case wave")
+        case_results, case_failures = self._execute_parallel_batch(
+            round_run_id=round_run_id,
+            match_id=match_id,
+            step_names=CASE_STEP_NAMES,
+            input_json_factory=lambda _step_name: {
+                "dossier": dossier_json,
+                "analysts": analysts,
+            },
+            settings=config.case_model,
+            schema_type=CaseAgentResponse,
+            match_label=match_label,
+        )
+        cases.update(case_results)
+        failed_steps.extend(case_failures)
 
         correction_pass_count = 0
         final_response: FinalDecisionResponse | None = None
         final_step_id = None
         try:
+            self._emit_progress(match_label, f"starting {FINAL_STEP_NAME}")
             final_json, final_step_id = self._execute_step_with_metadata(
                 round_run_id=round_run_id,
                 match_id=match_id,
                 step_name=FINAL_STEP_NAME,
                 input_json={
-                    "dossier": dossier.model_dump(mode="json"),
+                    "dossier": dossier_json,
                     "analysts": analysts,
                     "cases": cases,
                 },
                 settings=config.final_model,
-                adapter=final_adapter,
                 schema_type=FinalDecisionResponse,
+                match_label=match_label,
             )
             final_response = FinalDecisionResponse.model_validate(final_json)
         except Exception as exc:
             correction_pass_count = 1
             failed_steps.append({"step_name": FINAL_STEP_NAME, "error": str(exc)})
-            self._record_validation(
-                round_run_id=round_run_id,
-                match_id=match_id,
-                component_name=FINAL_STEP_NAME,
-                validation_status="failed",
-                errors=[{"message": str(exc)}],
-            )
             try:
+                self._emit_progress(match_label, f"starting {CORRECTION_STEP_NAME}")
                 final_json, final_step_id = self._execute_step_with_metadata(
                     round_run_id=round_run_id,
                     match_id=match_id,
                     step_name=CORRECTION_STEP_NAME,
                     input_json={
-                        "dossier": dossier.model_dump(mode="json"),
+                        "dossier": dossier_json,
                         "analysts": analysts,
                         "cases": cases,
                         "failed_steps": failed_steps,
                         "validation_error": str(exc),
                     },
                     settings=config.final_model,
-                    adapter=final_adapter,
                     schema_type=FinalDecisionResponse,
+                    match_label=match_label,
                 )
                 final_response = FinalDecisionResponse.model_validate(final_json)
             except Exception as correction_exc:
-                failed_steps.append({"step_name": CORRECTION_STEP_NAME, "error": str(correction_exc)})
-                self._record_validation(
-                    round_run_id=round_run_id,
-                    match_id=match_id,
-                    component_name=CORRECTION_STEP_NAME,
-                    validation_status="failed",
-                    errors=[{"message": str(correction_exc)}],
+                failed_steps.append(
+                    {"step_name": CORRECTION_STEP_NAME, "error": str(correction_exc)}
                 )
 
         if final_response is not None:
@@ -191,27 +185,48 @@ class AgentPipelineRunner:
             failed_steps=failed_steps,
         )
 
-    def _execute_step(
+    def _execute_parallel_batch(
         self,
         *,
         round_run_id,
         match_id,
-        step_name: str,
-        input_json: dict[str, Any],
+        step_names: list[str],
+        input_json_factory: Callable[[str], dict[str, Any]],
         settings: ModelSettings,
-        adapter: LLMAdapter,
         schema_type,
-    ) -> dict[str, Any]:
-        output_json, _ = self._execute_step_with_metadata(
-            round_run_id=round_run_id,
-            match_id=match_id,
-            step_name=step_name,
-            input_json=input_json,
-            settings=settings,
-            adapter=adapter,
-            schema_type=schema_type,
-        )
-        return output_json
+        match_label: str | None = None,
+    ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+        prepared_steps = [
+            self._prepare_step(
+                round_run_id=round_run_id,
+                match_id=match_id,
+                step_name=step_name,
+                input_json=input_json_factory(step_name),
+                settings=settings,
+                schema_type=schema_type,
+            )
+            for step_name in step_names
+        ]
+        futures: dict[Future[StepExecutionResult], PreparedStep] = {
+            self.executor.submit(self._run_step_worker, prepared_step): prepared_step
+            for prepared_step in prepared_steps
+        }
+        results: dict[str, dict[str, Any]] = {}
+        failures: list[dict[str, Any]] = []
+        for future in as_completed(futures):
+            prepared_step = futures[future]
+            try:
+                result = future.result()
+            except Exception as exc:
+                self._apply_step_failure(prepared_step, exc, match_label=match_label)
+                failures.append({"step_name": prepared_step.step_name, "error": str(exc)})
+            else:
+                results[prepared_step.step_name] = self._apply_step_success(
+                    prepared_step,
+                    result,
+                    match_label=match_label,
+                )
+        return results, failures
 
     def _execute_step_with_metadata(
         self,
@@ -221,9 +236,39 @@ class AgentPipelineRunner:
         step_name: str,
         input_json: dict[str, Any],
         settings: ModelSettings,
-        adapter: LLMAdapter,
         schema_type,
+        match_label: str | None = None,
     ) -> tuple[dict[str, Any], Any]:
+        prepared_step = self._prepare_step(
+            round_run_id=round_run_id,
+            match_id=match_id,
+            step_name=step_name,
+            input_json=input_json,
+            settings=settings,
+            schema_type=schema_type,
+        )
+        try:
+            result = self._run_step_worker(prepared_step)
+            output_json = self._apply_step_success(
+                prepared_step,
+                result,
+                match_label=match_label,
+            )
+            return output_json, prepared_step.step_row.id
+        except Exception as exc:
+            self._apply_step_failure(prepared_step, exc, match_label=match_label)
+            raise
+
+    def _prepare_step(
+        self,
+        *,
+        round_run_id,
+        match_id,
+        step_name: str,
+        input_json: dict[str, Any],
+        settings: ModelSettings,
+        schema_type,
+    ) -> PreparedStep:
         prompt_template = self._get_prompt_template(step_name)
         rendered_prompt = self._render_prompt(prompt_template.template_text, input_json)
         step = AgentStep(
@@ -243,31 +288,77 @@ class AgentPipelineRunner:
         )
         self.session.add(step)
         self.session.flush()
-        try:
-            adapter_result = adapter.run_structured(
-                step_name=step_name,
-                prompt=rendered_prompt,
-                input_json=input_json,
-                model_name=settings.model,
-                temperature=settings.temperature,
-                reasoning_effort=settings.reasoning_effort,
-                output_schema=schema_type.model_json_schema(),
-            )
-            validated = schema_type.model_validate(adapter_result.output_json)
-            step.output_json = validated.model_dump(mode="json")
-            step.tokens_input = adapter_result.tokens_input
-            step.tokens_output = adapter_result.tokens_output
-            step.provider_meta = adapter_result.provider_meta
-            step.status = "completed"
-            step.completed_at = utcnow()
-            self.session.flush()
-            return step.output_json, step.id
-        except Exception as exc:
-            step.status = "failed"
-            step.error_message = str(exc)
-            step.completed_at = utcnow()
-            self.session.flush()
-            raise
+        return PreparedStep(
+            step_name=step_name,
+            step_row=step,
+            rendered_prompt=rendered_prompt,
+            input_json=input_json,
+            settings=settings,
+            schema_type=schema_type,
+        )
+
+    @staticmethod
+    def _run_step_worker(prepared_step: PreparedStep) -> StepExecutionResult:
+        adapter = build_adapter(prepared_step.settings.provider)
+        adapter_result = adapter.run_structured(
+            step_name=prepared_step.step_name,
+            prompt=prepared_step.rendered_prompt,
+            input_json=prepared_step.input_json,
+            model_name=prepared_step.settings.model,
+            temperature=prepared_step.settings.temperature,
+            reasoning_effort=prepared_step.settings.reasoning_effort,
+            output_schema=prepared_step.schema_type.model_json_schema(),
+        )
+        validated = prepared_step.schema_type.model_validate(adapter_result.output_json)
+        return StepExecutionResult(
+            output_json=validated.model_dump(mode="json"),
+            tokens_input=adapter_result.tokens_input,
+            tokens_output=adapter_result.tokens_output,
+            provider_meta=adapter_result.provider_meta,
+        )
+
+    def _apply_step_success(
+        self,
+        prepared_step: PreparedStep,
+        result: StepExecutionResult,
+        *,
+        match_label: str | None = None,
+    ) -> dict[str, Any]:
+        prepared_step.step_row.output_json = result.output_json
+        prepared_step.step_row.tokens_input = result.tokens_input
+        prepared_step.step_row.tokens_output = result.tokens_output
+        prepared_step.step_row.provider_meta = result.provider_meta
+        prepared_step.step_row.status = "completed"
+        prepared_step.step_row.completed_at = utcnow()
+        self._record_validation(
+            round_run_id=prepared_step.step_row.round_run_id,
+            match_id=prepared_step.step_row.match_id,
+            component_name=prepared_step.step_name,
+            validation_status="passed",
+        )
+        self.session.flush()
+        self._emit_progress(match_label, f"completed {prepared_step.step_name}")
+        return prepared_step.step_row.output_json
+
+    def _apply_step_failure(
+        self,
+        prepared_step: PreparedStep,
+        exc: Exception,
+        *,
+        match_label: str | None = None,
+    ) -> None:
+        prepared_step.step_row.status = "failed"
+        prepared_step.step_row.error_message = str(exc)
+        prepared_step.step_row.completed_at = utcnow()
+        self._record_validation(
+            round_run_id=prepared_step.step_row.round_run_id,
+            match_id=prepared_step.step_row.match_id,
+            component_name=prepared_step.step_name,
+            validation_status="failed",
+            errors=[{"message": str(exc)}],
+        )
+        self.session.flush()
+        self._emit_progress(match_label, f"failed {prepared_step.step_name}: {exc}")
 
     def _get_prompt_template(self, step_name: str) -> PromptTemplate:
         template = self.session.scalar(
@@ -288,7 +379,12 @@ class AgentPipelineRunner:
         try:
             return template_text.format(
                 input_json=serialized,
-                dossier_json=json.dumps(input_json.get("dossier"), indent=2, sort_keys=True, default=str),
+                dossier_json=json.dumps(
+                    input_json.get("dossier"),
+                    indent=2,
+                    sort_keys=True,
+                    default=str,
+                ),
             )
         except KeyError:
             return f"{template_text}\n\nINPUT\n{serialized}"
@@ -311,3 +407,9 @@ class AgentPipelineRunner:
                 errors=errors,
             )
         )
+
+    def _emit_progress(self, match_label: str | None, message: str) -> None:
+        if self.progress_callback is None:
+            return
+        prefix = f"{match_label}: " if match_label else ""
+        self.progress_callback(f"{prefix}{message}")

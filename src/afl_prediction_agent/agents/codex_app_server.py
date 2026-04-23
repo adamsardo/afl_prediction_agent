@@ -542,11 +542,12 @@ class CodexAppServerClient:
             )
 
 
-_CLIENT: CodexAppServerClient | None = None
+_CLIENT_LOCAL = threading.local()
 
 
 def get_codex_app_server_client() -> CodexAppServerClient:
-    global _CLIENT
-    if _CLIENT is None:
-        _CLIENT = CodexAppServerClient()
-    return _CLIENT
+    client = getattr(_CLIENT_LOCAL, "client", None)
+    if client is None:
+        client = CodexAppServerClient()
+        _CLIENT_LOCAL.client = client
+    return client

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -92,6 +93,7 @@ class RoundRunService:
         lock_timestamp: datetime | None = None,
         notes: str | None = None,
         fetch_sources: bool = False,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> RoundRun:
         round_id = _uuid(round_id)
         round_obj = self.session.get(Round, round_id)
@@ -110,11 +112,25 @@ class RoundRunService:
         )
         self.session.add(round_run)
         self.session.flush()
+        self._emit_progress(
+            progress_callback,
+            f"Started run {round_run.id} for round {round_obj.id} with config {config_name}.",
+        )
 
         try:
+            self._emit_progress(progress_callback, "Running provider preflight.")
             self._run_provider_preflight(round_run=round_run, config=config)
             if fetch_sources:
-                self._prefetch_round_sources(round_run=round_run)
+                self._emit_progress(progress_callback, "Prefetching source snapshots.")
+                source_summaries = self._prefetch_round_sources(round_run=round_run)
+                for summary in source_summaries:
+                    message = (
+                        f"prefetch {summary.source_name}: created={summary.created} "
+                        f"skipped={summary.skipped}"
+                    )
+                    if summary.errors:
+                        message = f"{message} errors={len(summary.errors)}"
+                    self._emit_progress(progress_callback, message)
 
             winner_model_run = BaselineModelRun(
                 round_run_id=round_run.id,
@@ -141,7 +157,6 @@ class RoundRunService:
                 margin_model_version=config.margin_model_version,
             )
             dossier_builder = DossierBuilder()
-            agent_runner = AgentPipelineRunner(self.session, config.prompt_set_version)
 
             total_matches = self.session.scalar(
                 select(func.count()).select_from(Match).where(Match.round_id == round_run.round_id)
@@ -150,152 +165,183 @@ class RoundRunService:
             if not eligible_matches:
                 raise ValueError("No eligible matches were available for this round run")
 
+            agent_runner = AgentPipelineRunner(
+                self.session,
+                config.prompt_set_version,
+                progress_callback=progress_callback,
+            )
             run_had_warnings = len(eligible_matches) != total_matches
-            for match, context in eligible_matches:
-                try:
-                    feature_result = feature_builder.build_for_match(self.session, context)
-                    feature_set = FeatureSet(
-                        round_run_id=round_run.id,
-                        match_id=match.id,
-                        feature_version=config.feature_version,
-                        input_hash=feature_result.input_hash,
-                        features=feature_result.features,
+            self._emit_progress(
+                progress_callback,
+                f"Eligible matches: {len(eligible_matches)}/{total_matches}",
+            )
+            try:
+                for index, (match, context) in enumerate(eligible_matches, start=1):
+                    match_label = (
+                        f"[{index}/{len(eligible_matches)}] "
+                        f"{context.home_team.name} vs {context.away_team.name}"
                     )
-                    self.session.add(feature_set)
-                    self.session.flush()
+                    self._emit_progress(progress_callback, f"{match_label}: building features")
+                    try:
+                        feature_result = feature_builder.build_for_match(self.session, context)
+                        feature_set = FeatureSet(
+                            round_run_id=round_run.id,
+                            match_id=match.id,
+                            feature_version=config.feature_version,
+                            input_hash=feature_result.input_hash,
+                            features=feature_result.features,
+                        )
+                        self.session.add(feature_set)
+                        self.session.flush()
 
-                    baseline_result = baseline_service.predict(feature_result.features)
-                    predicted_winner_team_id = (
-                        match.home_team_id
-                        if baseline_result.home_win_probability >= baseline_result.away_win_probability
-                        else match.away_team_id
-                    )
-                    baseline_prediction = BaselinePrediction(
-                        round_run_id=round_run.id,
-                        match_id=match.id,
-                        winner_model_run_id=winner_model_run.id,
-                        margin_model_run_id=margin_model_run.id,
-                        predicted_winner_team_id=predicted_winner_team_id,
-                        home_win_probability=_decimal(baseline_result.home_win_probability),
-                        away_win_probability=_decimal(baseline_result.away_win_probability),
-                        predicted_margin=Decimal(str(baseline_result.predicted_margin)),
-                        confidence_reference=_decimal(baseline_result.confidence_reference),
-                        top_drivers=baseline_result.top_drivers,
-                    )
-                    self.session.add(baseline_prediction)
-                    self.session.flush()
+                        baseline_result = baseline_service.predict(feature_result.features)
+                        predicted_winner_team_id = (
+                            match.home_team_id
+                            if baseline_result.home_win_probability >= baseline_result.away_win_probability
+                            else match.away_team_id
+                        )
+                        baseline_prediction = BaselinePrediction(
+                            round_run_id=round_run.id,
+                            match_id=match.id,
+                            winner_model_run_id=winner_model_run.id,
+                            margin_model_run_id=margin_model_run.id,
+                            predicted_winner_team_id=predicted_winner_team_id,
+                            home_win_probability=_decimal(baseline_result.home_win_probability),
+                            away_win_probability=_decimal(baseline_result.away_win_probability),
+                            predicted_margin=Decimal(str(baseline_result.predicted_margin)),
+                            confidence_reference=_decimal(baseline_result.confidence_reference),
+                            top_drivers=baseline_result.top_drivers,
+                        )
+                        self.session.add(baseline_prediction)
+                        self.session.flush()
 
-                    dossier, dossier_hash = dossier_builder.build(
-                        context=context,
-                        feature_result=feature_result,
-                        baseline_result=baseline_result,
-                        feature_set_id=feature_set.id,
-                        baseline_prediction_id=baseline_prediction.id,
-                        benchmark_prediction_id=context.benchmark_prediction.id
-                        if context.benchmark_prediction
-                        else None,
-                    )
-                    dossier_row = MatchDossier(
-                        round_run_id=round_run.id,
-                        match_id=match.id,
-                        dossier_version=dossier_builder.dossier_version,
-                        input_hash=dossier_hash,
-                        dossier=dossier.model_dump(mode="json"),
-                    )
-                    self.session.add(dossier_row)
-                    self.session.flush()
+                        dossier, dossier_hash = dossier_builder.build(
+                            context=context,
+                            feature_result=feature_result,
+                            baseline_result=baseline_result,
+                            feature_set_id=feature_set.id,
+                            baseline_prediction_id=baseline_prediction.id,
+                            benchmark_prediction_id=context.benchmark_prediction.id
+                            if context.benchmark_prediction
+                            else None,
+                        )
+                        dossier_row = MatchDossier(
+                            round_run_id=round_run.id,
+                            match_id=match.id,
+                            dossier_version=dossier_builder.dossier_version,
+                            input_hash=dossier_hash,
+                            dossier=dossier.model_dump(mode="json"),
+                        )
+                        self.session.add(dossier_row)
+                        self.session.flush()
 
-                    agent_result = agent_runner.run_for_match(
-                        round_run_id=round_run.id,
-                        match_id=match.id,
-                        dossier=dossier,
-                        config=config,
-                    )
-                    if agent_result.final_response is None or agent_result.final_step_id is None:
+                        self._emit_progress(progress_callback, f"{match_label}: running agent pipeline")
+                        agent_result = agent_runner.run_for_match(
+                            round_run_id=round_run.id,
+                            match_id=match.id,
+                            dossier=dossier,
+                            config=config,
+                            match_label=match_label,
+                        )
+                        if agent_result.final_response is None or agent_result.final_step_id is None:
+                            run_had_warnings = True
+                            self._mark_final_verdict_unavailable(
+                                round_run_id=round_run.id,
+                                match_id=match.id,
+                                reason="final_agent_failed",
+                                payload={"failed_steps": agent_result.failed_steps},
+                            )
+                            self._emit_progress(
+                                progress_callback,
+                                f"{match_label}: baseline stored, final verdict unavailable",
+                            )
+                            continue
+
+                        validation = validate_final_response(dossier, agent_result.final_response)
+                        self.session.add(
+                            ValidationLog(
+                                round_run_id=round_run.id,
+                                match_id=match.id,
+                                component_name="final_verdict_consistency",
+                                validation_status=validation.status,
+                                errors=validation.errors + validation.warnings,
+                            )
+                        )
+                        if validation.status != "passed":
+                            run_had_warnings = True
+                            self._mark_final_verdict_unavailable(
+                                round_run_id=round_run.id,
+                                match_id=match.id,
+                                reason="final_verdict_consistency_failed",
+                                payload={
+                                    "errors": validation.errors,
+                                    "warnings": validation.warnings,
+                                },
+                            )
+                            self._emit_progress(
+                                progress_callback,
+                                f"{match_label}: final verdict failed consistency validation",
+                            )
+                            continue
+
+                        self.session.add(
+                            FinalAgentVerdict(
+                                round_run_id=round_run.id,
+                                match_id=match.id,
+                                final_agent_step_id=agent_result.final_step_id,
+                                predicted_winner_team_id=agent_result.final_response.predicted_winner_team_id,
+                                home_win_probability=_decimal(agent_result.final_response.home_win_probability),
+                                away_win_probability=_decimal(agent_result.final_response.away_win_probability),
+                                predicted_margin=Decimal(str(agent_result.final_response.predicted_margin)),
+                                confidence_score=Decimal(str(agent_result.final_response.confidence_score)),
+                                top_drivers=[
+                                    driver.model_dump(mode="json")
+                                    for driver in agent_result.final_response.top_drivers
+                                ],
+                                uncertainty_note=agent_result.final_response.uncertainty_note,
+                                rationale_summary=agent_result.final_response.rationale_summary,
+                                validation_status=validation.status,
+                                correction_pass_count=agent_result.correction_pass_count,
+                            )
+                        )
+                        if agent_result.failed_steps:
+                            run_had_warnings = True
+                        self._emit_progress(progress_callback, f"{match_label}: completed")
+                    except Exception as exc:
                         run_had_warnings = True
-                        self._mark_final_verdict_unavailable(
+                        self.session.add(
+                            ValidationLog(
+                                round_run_id=round_run.id,
+                                match_id=match.id,
+                                component_name="match_pipeline",
+                                validation_status="failed",
+                                errors=[{"message": str(exc)}],
+                            )
+                        )
+                        self._create_audit_event(
                             round_run_id=round_run.id,
                             match_id=match.id,
-                            reason="final_agent_failed",
-                            payload={"failed_steps": agent_result.failed_steps},
+                            event_type="match_pipeline_failed",
+                            payload={"error": str(exc)},
                         )
-                        continue
-
-                    validation = validate_final_response(dossier, agent_result.final_response)
-                    self.session.add(
-                        ValidationLog(
-                            round_run_id=round_run.id,
-                            match_id=match.id,
-                            component_name="final_verdict_consistency",
-                            validation_status=validation.status,
-                            errors=validation.errors + validation.warnings,
-                        )
-                    )
-                    if validation.status != "passed":
-                        run_had_warnings = True
-                        self._mark_final_verdict_unavailable(
-                            round_run_id=round_run.id,
-                            match_id=match.id,
-                            reason="final_verdict_consistency_failed",
-                            payload={
-                                "errors": validation.errors,
-                                "warnings": validation.warnings,
-                            },
-                        )
-                        continue
-
-                    self.session.add(
-                        FinalAgentVerdict(
-                            round_run_id=round_run.id,
-                            match_id=match.id,
-                            final_agent_step_id=agent_result.final_step_id,
-                            predicted_winner_team_id=agent_result.final_response.predicted_winner_team_id,
-                            home_win_probability=_decimal(agent_result.final_response.home_win_probability),
-                            away_win_probability=_decimal(agent_result.final_response.away_win_probability),
-                            predicted_margin=Decimal(str(agent_result.final_response.predicted_margin)),
-                            confidence_score=Decimal(str(agent_result.final_response.confidence_score)),
-                            top_drivers=[
-                                driver.model_dump(mode="json")
-                                for driver in agent_result.final_response.top_drivers
-                            ],
-                            uncertainty_note=agent_result.final_response.uncertainty_note,
-                            rationale_summary=agent_result.final_response.rationale_summary,
-                            validation_status=validation.status,
-                            correction_pass_count=agent_result.correction_pass_count,
-                        )
-                    )
-                    if agent_result.failed_steps:
-                        run_had_warnings = True
-                except Exception as exc:
-                    run_had_warnings = True
-                    self.session.add(
-                        ValidationLog(
-                            round_run_id=round_run.id,
-                            match_id=match.id,
-                            component_name="match_pipeline",
-                            validation_status="failed",
-                            errors=[{"message": str(exc)}],
-                        )
-                    )
-                    self._create_audit_event(
-                        round_run_id=round_run.id,
-                        match_id=match.id,
-                        event_type="match_pipeline_failed",
-                        payload={"error": str(exc)},
-                    )
+                        self._emit_progress(progress_callback, f"{match_label}: failed: {exc}")
+            finally:
+                agent_runner.close()
             round_run.status = "completed_with_warnings" if run_had_warnings else "completed"
             round_run.completed_at = utcnow()
             self.session.flush()
+            self._emit_progress(progress_callback, f"Run {round_run.id} finished with status={round_run.status}.")
             return round_run
-        except Exception:
+        except Exception as exc:
             round_run.status = "failed"
             round_run.completed_at = utcnow()
             self.session.flush()
+            self._emit_progress(progress_callback, f"Run {round_run.id} failed: {exc}")
             raise
 
-    def _prefetch_round_sources(self, *, round_run: RoundRun) -> None:
+    def _prefetch_round_sources(self, *, round_run: RoundRun):
         sync_service = RoundSourceSyncService(self.session)
-        sync_service.snapshot_round(round_id=round_run.round_id, round_run_id=round_run.id)
+        return sync_service.snapshot_round(round_id=round_run.round_id, round_run_id=round_run.id)
 
     def _eligible_matches(self, *, round_run: RoundRun) -> list[tuple[Match, LoadedMatchContext]]:
         matches = self.session.scalars(
@@ -361,6 +407,14 @@ class RoundRunService:
                 payload=payload,
             )
         )
+
+    def _emit_progress(
+        self,
+        progress_callback: Callable[[str], None] | None,
+        message: str,
+    ) -> None:
+        if progress_callback is not None:
+            progress_callback(message)
 
     def list_round_runs(self, round_id) -> list[RoundRunSummaryResponse]:
         runs = self.session.scalars(
