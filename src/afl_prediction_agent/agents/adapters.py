@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +12,63 @@ from afl_prediction_agent.contracts import (
     FinalDecisionResponse,
     MatchDossierContract,
 )
+
+
+def to_openai_output_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    strict_schema = copy.deepcopy(schema)
+    _normalize_openai_schema_node(strict_schema)
+    return strict_schema
+
+
+def _normalize_openai_schema_node(node: Any) -> None:
+    if isinstance(node, list):
+        for item in node:
+            _normalize_openai_schema_node(item)
+        return
+    if not isinstance(node, dict):
+        return
+
+    node.pop("default", None)
+    node.pop("examples", None)
+
+    if "$defs" in node and isinstance(node["$defs"], dict):
+        for child in node["$defs"].values():
+            _normalize_openai_schema_node(child)
+
+    if "definitions" in node and isinstance(node["definitions"], dict):
+        for child in node["definitions"].values():
+            _normalize_openai_schema_node(child)
+
+    if "properties" in node and isinstance(node["properties"], dict):
+        for child in node["properties"].values():
+            _normalize_openai_schema_node(child)
+        node["required"] = list(node["properties"].keys())
+        node.setdefault("additionalProperties", False)
+
+    if "items" in node:
+        _normalize_openai_schema_node(node["items"])
+
+    if "anyOf" in node:
+        _normalize_openai_schema_node(node["anyOf"])
+
+    if "allOf" in node:
+        _normalize_openai_schema_node(node["allOf"])
+
+    if "oneOf" in node:
+        _normalize_openai_schema_node(node["oneOf"])
+
+    if "prefixItems" in node:
+        _normalize_openai_schema_node(node["prefixItems"])
+
+    if "not" in node:
+        _normalize_openai_schema_node(node["not"])
+
+    if "if" in node:
+        _normalize_openai_schema_node(node["if"])
+    if "then" in node:
+        _normalize_openai_schema_node(node["then"])
+    if "else" in node:
+        _normalize_openai_schema_node(node["else"])
 
 
 @dataclass(slots=True)

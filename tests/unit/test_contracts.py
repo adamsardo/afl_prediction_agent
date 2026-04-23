@@ -5,7 +5,13 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
-from afl_prediction_agent.contracts import FinalDecisionResponse, ModelSettings
+from afl_prediction_agent.agents.adapters import to_openai_output_schema
+from afl_prediction_agent.contracts import (
+    AnalystResponse,
+    CaseAgentResponse,
+    FinalDecisionResponse,
+    ModelSettings,
+)
 
 
 def test_final_decision_contract_rejects_invalid_probability_sum() -> None:
@@ -38,3 +44,24 @@ def test_model_settings_reject_temperature_for_gpt54_reasoning_effort() -> None:
             temperature=0.2,
             reasoning_effort="xhigh",
         )
+
+
+def test_openai_output_schema_marks_defaulted_fields_as_required() -> None:
+    schema = to_openai_output_schema(AnalystResponse.model_json_schema())
+
+    assert schema["required"] == ["summary", "signals", "risks", "unknowns"]
+    assert "default" not in schema["properties"]["risks"]
+    assert schema["additionalProperties"] is False
+
+
+def test_openai_output_schema_marks_case_arrays_as_required() -> None:
+    schema = to_openai_output_schema(CaseAgentResponse.model_json_schema())
+
+    assert schema["required"] == [
+        "side",
+        "case_summary",
+        "strongest_points",
+        "weak_points",
+        "rebuttals",
+    ]
+    assert schema["additionalProperties"] is False

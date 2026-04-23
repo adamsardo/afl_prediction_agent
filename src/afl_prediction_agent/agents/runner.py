@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from afl_prediction_agent.agents.adapters import build_adapter
+from afl_prediction_agent.agents.adapters import build_adapter, to_openai_output_schema
 from afl_prediction_agent.contracts import (
     AnalystResponse,
     CaseAgentResponse,
@@ -307,7 +307,7 @@ class AgentPipelineRunner:
             model_name=prepared_step.settings.model,
             temperature=prepared_step.settings.temperature,
             reasoning_effort=prepared_step.settings.reasoning_effort,
-            output_schema=prepared_step.schema_type.model_json_schema(),
+            output_schema=to_openai_output_schema(prepared_step.schema_type.model_json_schema()),
         )
         validated = prepared_step.schema_type.model_validate(adapter_result.output_json)
         return StepExecutionResult(
