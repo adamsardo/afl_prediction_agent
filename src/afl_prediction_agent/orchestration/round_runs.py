@@ -18,6 +18,7 @@ from afl_prediction_agent.agents.runner import AgentPipelineRunner
 from afl_prediction_agent.configuration import ensure_run_config_seeded
 from afl_prediction_agent.contracts import (
     MatchRunDetailResponse,
+    MatchRunSummaryResponse,
     RoundRunSummaryResponse,
     RunConfigFile,
     RunDetailResponse,
@@ -641,6 +642,24 @@ class RoundRunService:
         match = self.session.get(Match, match_id)
         if run is None or match is None:
             raise ValueError("Run or match not found")
+        return self._build_match_run_detail(run, match)
+
+    def list_run_matches(self, run_id) -> list[MatchRunSummaryResponse]:
+        run_id = _uuid(run_id)
+        run = self.session.get(RoundRun, run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        matches = self.session.scalars(
+            select(Match)
+            .where(Match.round_id == run.round_id)
+            .order_by(Match.scheduled_at.asc())
+        ).all()
+        return [
+            self._build_match_run_summary(self._build_match_run_detail(run, match))
+            for match in matches
+        ]
+
+    def _build_match_run_detail(self, run: RoundRun, match: Match) -> MatchRunDetailResponse:
         run_config = self.session.get(RunConfig, run.run_config_id)
         context = load_match_context(
             self.session,
@@ -650,44 +669,44 @@ class RoundRunService:
         )
         dossier = self.session.scalar(
             select(MatchDossier).where(
-                MatchDossier.round_run_id == run_id,
-                MatchDossier.match_id == match_id,
+                MatchDossier.round_run_id == run.id,
+                MatchDossier.match_id == match.id,
             )
         )
         feature_set = self.session.scalar(
             select(FeatureSet).where(
-                FeatureSet.round_run_id == run_id,
-                FeatureSet.match_id == match_id,
+                FeatureSet.round_run_id == run.id,
+                FeatureSet.match_id == match.id,
             )
         )
         baseline = self.session.scalar(
             select(BaselinePrediction).where(
-                BaselinePrediction.round_run_id == run_id,
-                BaselinePrediction.match_id == match_id,
+                BaselinePrediction.round_run_id == run.id,
+                BaselinePrediction.match_id == match.id,
             )
         )
         verdict = self.session.scalar(
             select(FinalAgentVerdict).where(
-                FinalAgentVerdict.round_run_id == run_id,
-                FinalAgentVerdict.match_id == match_id,
+                FinalAgentVerdict.round_run_id == run.id,
+                FinalAgentVerdict.match_id == match.id,
             )
         )
         steps = self.session.scalars(
             select(AgentStep)
-            .where(AgentStep.round_run_id == run_id, AgentStep.match_id == match_id)
+            .where(AgentStep.round_run_id == run.id, AgentStep.match_id == match.id)
             .order_by(AgentStep.started_at.asc())
         ).all()
         skip_event = self.session.scalar(
             select(AuditEvent).where(
-                AuditEvent.round_run_id == run_id,
-                AuditEvent.match_id == match_id,
+                AuditEvent.round_run_id == run.id,
+                AuditEvent.match_id == match.id,
                 AuditEvent.event_type == "match_excluded",
             )
         )
         final_unavailable = self.session.scalar(
             select(AuditEvent).where(
-                AuditEvent.round_run_id == run_id,
-                AuditEvent.match_id == match_id,
+                AuditEvent.round_run_id == run.id,
+                AuditEvent.match_id == match.id,
                 AuditEvent.event_type == "final_agent_verdict_unavailable",
             )
         )
@@ -720,7 +739,8 @@ class RoundRunService:
             match_status = "failed"
         return MatchRunDetailResponse(
             run_id=run.id,
-            match_id=match_id,
+            match_id=match.id,
+            scheduled_at=match.scheduled_at,
             season_year=context.season.season_year,
             round_number=context.round.round_number,
             home_team_name=context.home_team.name,
@@ -791,6 +811,23 @@ class RoundRunService:
                 }
                 for step in steps
             ],
+        )
+
+    def _build_match_run_summary(
+        self,
+        detail: MatchRunDetailResponse,
+    ) -> MatchRunSummaryResponse:
+        return MatchRunSummaryResponse(
+            run_id=detail.run_id,
+            match_id=detail.match_id,
+            scheduled_at=detail.scheduled_at,
+            home_team_name=detail.home_team_name,
+            away_team_name=detail.away_team_name,
+            venue_name=detail.venue_name,
+            match_status=detail.match_status,
+            skip_reason=detail.skip_reason,
+            baseline_prediction=detail.baseline_prediction,
+            final_verdict=detail.final_verdict,
         )
 
     def _run_provider_preflight(self, *, round_run: RoundRun, config: RunConfigFile) -> None:

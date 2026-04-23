@@ -245,6 +245,7 @@ class RunDetailResponse(StrictModel):
 class MatchRunDetailResponse(StrictModel):
     run_id: uuid.UUID
     match_id: uuid.UUID
+    scheduled_at: datetime | None = None
     season_year: int | None = None
     round_number: int | None = None
     home_team_name: str | None = None
@@ -264,6 +265,19 @@ class MatchRunDetailResponse(StrictModel):
     baseline_prediction: dict[str, Any] | None = None
     final_verdict: dict[str, Any] | None = None
     agent_steps: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class MatchRunSummaryResponse(StrictModel):
+    run_id: uuid.UUID
+    match_id: uuid.UUID
+    scheduled_at: datetime | None = None
+    home_team_name: str | None = None
+    away_team_name: str | None = None
+    venue_name: str | None = None
+    match_status: Literal["completed", "baseline_only", "skipped", "failed", "pending"]
+    skip_reason: str | None = None
+    baseline_prediction: dict[str, Any] | None = None
+    final_verdict: dict[str, Any] | None = None
 
 
 class EvaluationSummaryResponse(StrictModel):

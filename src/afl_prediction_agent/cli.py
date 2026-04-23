@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import typer
 
 from afl_prediction_agent.agents.codex_app_server import get_codex_app_server_client
@@ -118,6 +120,28 @@ def list_runs(round_id: str) -> None:
             typer.echo(
                 f"{run.run_id} status={run.status} created_at={run.created_at.isoformat()}"
             )
+
+
+@app.command("show-run")
+def show_run(run_id: str) -> None:
+    with SessionLocal() as session:
+        service = RoundRunService(session)
+        payload = {
+            "run": service.get_run_detail(run_id).model_dump(mode="json"),
+            "matches": [
+                row.model_dump(mode="json")
+                for row in service.list_run_matches(run_id)
+            ],
+        }
+        typer.echo(json.dumps(payload, indent=2))
+
+
+@app.command("show-match")
+def show_match(run_id: str, match_id: str) -> None:
+    with SessionLocal() as session:
+        service = RoundRunService(session)
+        payload = service.get_match_run_detail(run_id, match_id).model_dump(mode="json")
+        typer.echo(json.dumps(payload, indent=2))
 
 
 @codex_auth_app.command("status")

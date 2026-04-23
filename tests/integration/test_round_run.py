@@ -188,6 +188,11 @@ def test_round_run_and_evaluation_flow(session) -> None:
     assert detail.processed_match_count == 1
     assert detail.baseline_only_match_count == 0
     assert detail.verdict_count == 1
+    match_summaries = round_service.list_run_matches(run.id)
+    assert len(match_summaries) == 1
+    assert match_summaries[0].match_status == "completed"
+    assert match_summaries[0].final_verdict is not None
+    assert match_summaries[0].scheduled_at == target_match.scheduled_at
     match_detail = round_service.get_match_run_detail(run.id, target_match.id)
     assert match_detail.match_status == "completed"
     assert match_detail.analyst_summaries

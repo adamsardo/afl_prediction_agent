@@ -45,6 +45,15 @@ def get_match_run(run_id: str, match_id: str, session: Session = Depends(get_ses
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/runs/{run_id}/matches")
+def list_run_matches(run_id: str, session: Session = Depends(get_session)):
+    service = RoundRunService(session)
+    try:
+        return service.list_run_matches(run_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/rounds/{round_id}/run")
 def run_round(round_id: str, payload: RunRoundRequest, session: Session = Depends(get_session)):
     service = RoundRunService(session)
