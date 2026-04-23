@@ -127,7 +127,9 @@ class BomWeatherConnector:
         payload = self.ftp_client.read_binary(archive_name)
         with tarfile.open(fileobj=BytesIO(payload), mode="r:gz") as archive:
             target_suffix = f"{prefix}60910.{mapping.station_id}.json"
-            member_name = next(name for name in archive.getnames() if name.endswith(target_suffix))
+            member_name = next((name for name in archive.getnames() if name.endswith(target_suffix)), None)
+            if member_name is None:
+                return {}
             raw = archive.extractfile(member_name)
             assert raw is not None
             observation_payload = json.loads(raw.read().decode("utf-8"))

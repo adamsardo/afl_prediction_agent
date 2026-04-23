@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from afl_prediction_agent.core.settings import get_settings
@@ -98,11 +98,6 @@ class CanonicalMappingService:
         timezone_name: str = "Australia/Melbourne",
         create_missing: bool = False,
     ) -> MappingResult:
-        if external_id:
-            existing = self._mapped_entity(Venue, source_name, "venue", external_id)
-            if existing is not None:
-                return MappingResult(existing.id, "mapped", existing.name)
-
         alias_rows = _alias_payload().get("venue_bom_mapping.json", [])
         alias_index = {}
         for row in alias_rows:
@@ -110,9 +105,33 @@ class CanonicalMappingService:
                 alias_index[alias.lower()] = row
         alias_row = alias_index.get(name.strip().lower())
         canonical_name = alias_row["venue_name"] if alias_row else name
-        statement = select(Venue).where(Venue.name == canonical_name)
         if external_id:
-            statement = statement.where((Venue.name == canonical_name) | (Venue.venue_code == external_id))
+            existing = self._mapped_entity(Venue, source_name, "venue", external_id)
+            if existing is not None:
+                if alias_row:
+                    existing.name = canonical_name
+                    existing.city = city or alias_row.get("city") or existing.city
+                    existing.state_code = state_code or alias_row.get("state_code") or existing.state_code
+                    existing.timezone = timezone_name or existing.timezone
+                    existing.bom_location_code = (
+                        alias_row.get("forecast_location_name") or existing.bom_location_code
+                    )
+                    existing.bom_station_id = alias_row.get("station_id") or existing.bom_station_id
+                elif existing.city is None and city is not None:
+                    existing.city = city
+                    existing.state_code = state_code or existing.state_code
+                    existing.timezone = timezone_name or existing.timezone
+                if existing.venue_code is None:
+                    existing.venue_code = external_id
+                self.session.flush()
+                return MappingResult(existing.id, "mapped", existing.name)
+
+        if external_id:
+            statement = select(Venue).where(
+                or_(Venue.name == canonical_name, Venue.venue_code == external_id)
+            )
+        else:
+            statement = select(Venue).where(Venue.name == canonical_name)
         venue = self.session.scalar(statement)
         if venue is None and create_missing:
             venue = self.fixture_service.upsert_venue(
@@ -126,6 +145,21 @@ class CanonicalMappingService:
             )
         if venue is None:
             return MappingResult(None, "unresolved")
+
+        if alias_row:
+            venue.name = canonical_name
+            venue.city = city or alias_row.get("city") or venue.city
+            venue.state_code = state_code or alias_row.get("state_code") or venue.state_code
+            venue.timezone = timezone_name or venue.timezone
+            venue.bom_location_code = alias_row.get("forecast_location_name") or venue.bom_location_code
+            venue.bom_station_id = alias_row.get("station_id") or venue.bom_station_id
+        elif venue.city is None and city is not None:
+            venue.city = city
+            venue.state_code = state_code or venue.state_code
+            venue.timezone = timezone_name or venue.timezone
+        if external_id and venue.venue_code is None:
+            venue.venue_code = external_id
+        self.session.flush()
 
         if external_id:
             self._upsert_mapping(

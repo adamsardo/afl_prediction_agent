@@ -163,27 +163,189 @@ Postgres via SQLAlchemy + Alembic. Every run is audit-complete.
 
 Eligibility rule for a round run: if official lineups for either side are missing at lock time, the match is skipped with a `match_excluded` audit event. No late-out reruns in v1.
 
-## Quick start
+## Run It End To End
+
+### 1. Create the local env file
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-python3 -m pip install -e ".[dev]"
-
-docker compose up -d postgres
-export AFL_AGENT_DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/afl_agent"
-
-alembic upgrade head
-afl-agent seed-config --config-name v1_agentic_default
-afl-agent seed-config --config-name v1_agentic_codex_gpt54   # optional, requires Codex auth
-
-uvicorn afl_prediction_agent.api.app:app --reload
+cp .env.example .env
 ```
 
-For `gpt-5.4` runs, auth once with the ChatGPT device-code flow:
+Then edit `.env` and set at least:
+
+```bash
+AFL_AGENT_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/afl_agent
+AFL_AGENT_CONTACT_EMAIL=your-real-email@example.com
+```
+
+Optional but recommended:
+
+```bash
+AFL_AGENT_ODDS_API_KEY=your_the_odds_api_key
+AFL_AGENT_ODDS_AU_BOOKMAKERS=tab,sportsbet,neds,ladbrokes_au,betfair_ex_au,betr_au,pointsbetau,bluebet
+```
+
+Only set this if you want to override the default Squiggle header:
+
+```bash
+AFL_AGENT_SQUIGGLE_USER_AGENT=AFL Prediction Agent - your-real-email@example.com
+```
+
+### 2. Install Python dependencies
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -e ".[dev]"
+```
+
+### 3. Start Postgres
+
+```bash
+docker compose up -d postgres
+```
+
+### 4. Install R dependencies for `fitzRoy`
+
+`fitzRoy` is required for official AFL and AFL Tables ingestion:
+
+```bash
+Rscript -e "install.packages(c('jsonlite','fitzRoy'), repos='https://cloud.r-project.org')"
+```
+
+### 5. Initialize the database and seed configs
+
+```bash
+alembic upgrade head
+afl-agent seed-config --config-name v1_agentic_default
+afl-agent seed-config --config-name v1_agentic_codex_gpt54
+```
+
+### 6. If you want `gpt-5.4`, authenticate Codex once
+
+Skip this if you only want the deterministic `heuristic` config.
 
 ```bash
 afl-agent auth codex login --device-code
 afl-agent auth codex status
+```
+
+You want `auth_mode=chatgpt` and a supported paid plan in the status output.
+
+### 7. Start the API
+
+```bash
+PYTHONPATH=src uvicorn afl_prediction_agent.api.app:app --reload
+```
+
+### 8. Ingest football data
+
+For a target season and round:
+
+```bash
+afl-agent ingest fixtures 2026 --round-number 7
+afl-agent ingest results 2026 --round-number 7
+afl-agent ingest stats 2026 --round-number 7 --source-track official
+afl-agent ingest stats 2026 --round-number 7 --source-track archive
+```
+
+If you do not set `AFL_AGENT_ODDS_AU_BOOKMAKERS`, the app uses the checked-in default allowlist from [`data/mappings/odds_bookmakers_au.json`](data/mappings/odds_bookmakers_au.json). Set the env var only if you want to override that list.
+
+If you want to review any unresolved mappings before running:
+
+```bash
+afl-agent ingest review-unresolved
+```
+
+### 9. Find the `round_id`
+
+Use Postgres directly:
+
+```bash
+psql "postgresql://postgres:postgres@localhost:5432/afl_agent" -c "
+select
+  r.id,
+  s.season_year,
+  r.round_number,
+  r.round_name
+from rounds r
+join seasons s on s.id = r.season_id
+order by s.season_year desc, r.round_number desc;
+"
+```
+
+### 10. Capture round snapshots
+
+This pulls lineups, injuries, weather, odds, and benchmarks for that round:
+
+```bash
+afl-agent ingest snapshot-round <round_id>
+```
+
+### 11. Run the prediction pipeline
+
+Heuristic/local run:
+
+```bash
+afl-agent run-round <round_id> --config-name v1_agentic_default
+```
+
+`gpt-5.4` run through local Codex app-server auth:
+
+```bash
+afl-agent run-round <round_id> --config-name v1_agentic_codex_gpt54
+```
+
+`run-round` defaults to `--fetch-sources`, so you can also skip the separate snapshot command and let the run capture the latest source state itself:
+
+```bash
+afl-agent run-round <round_id> --config-name v1_agentic_codex_gpt54 --fetch-sources
+```
+
+### 12. Inspect the run
+
+List runs for that round:
+
+```bash
+afl-agent list-runs <round_id>
+```
+
+Inspect over HTTP:
+
+```bash
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/runs/<run_id>
+curl http://127.0.0.1:8000/runs/<run_id>/matches/<match_id>
+```
+
+### 13. Evaluate after results land
+
+Once the actual round results are present in `matches`:
+
+```bash
+afl-agent evaluate-run <run_id>
+```
+
+### 14. Replay historical rounds or seasons
+
+```bash
+afl-agent replay-round <round_id> --config-name v1_agentic_default --lock-timestamp 2026-05-01T09:00:00+00:00
+afl-agent replay-season <season_id> --config-name v1_agentic_default
+```
+
+### 15. Minimal happy path
+
+If you just want the shortest working sequence:
+
+```bash
+source .venv/bin/activate
+docker compose up -d postgres
+alembic upgrade head
+afl-agent seed-config --config-name v1_agentic_default
+afl-agent ingest fixtures 2026 --round-number 7
+afl-agent ingest stats 2026 --round-number 7 --source-track official
+afl-agent ingest stats 2026 --round-number 7 --source-track archive
+afl-agent run-round <round_id> --config-name v1_agentic_default
 ```
 
 ## Round workflow

@@ -137,7 +137,11 @@
   },
   {
     "venue_name": "Manuka Oval",
-    "aliases": ["Manuka Oval"],
+    "aliases": [
+      "Manuka Oval",
+      "Corroboree Group Oval Manuka",
+      "Corroboree Group Manuka Oval"
+    ],
     "city": "Canberra",
     "state_code": "ACT",
     "station_id": "070246",
